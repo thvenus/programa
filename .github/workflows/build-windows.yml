@@ -1,0 +1,112 @@
+name: Build Noar Mordomo Windows EXE
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - name: Baixar o código
+        uses: actions/checkout@v4
+
+      - name: Preparar Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Instalar WiX Toolset para gerar o instalador EXE
+        shell: pwsh
+        run: |
+          choco install wixtoolset --yes --no-progress
+          $programFilesX86 = [Environment]::GetFolderPath("ProgramFilesX86")
+          $wixBins = Get-ChildItem $programFilesX86 -Directory -Filter "WiX Toolset*" -ErrorAction SilentlyContinue |
+            ForEach-Object { Join-Path $_.FullName "bin" } |
+            Where-Object { Test-Path (Join-Path $_ "candle.exe") }
+          if (-not $wixBins) {
+            throw "WiX Toolset não foi localizado; não é possível criar o instalador EXE."
+          }
+          $env:PATH = ($wixBins -join ";") + ";" + $env:PATH
+          "WiX bin: $($wixBins -join '; ')"
+          where.exe candle.exe
+          where.exe light.exe
+
+      - name: Compilar Java e executar autotestes
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          New-Item -ItemType Directory -Force build\classes, build\input, dist | Out-Null
+          javac --add-modules jdk.httpserver -encoding UTF-8 -d build\classes src\NoarMordomo.java
+          if ($LASTEXITCODE -ne 0) { throw "A compilação Java falhou." }
+          java --add-modules jdk.httpserver -cp build\classes NoarMordomo --self-test
+          if ($LASTEXITCODE -ne 0) { throw "Os autotestes falharam." }
+          jar --create --file build\input\NoarMordomo.jar --main-class NoarMordomo -C build\classes .
+          if ($LASTEXITCODE -ne 0) { throw "Não foi possível criar o JAR." }
+
+      - name: Testar a interface HTTP local
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $server = Start-Process -FilePath "java" -ArgumentList @("--add-modules","jdk.httpserver","-cp","build\classes","NoarMordomo","--no-browser") -PassThru -NoNewWindow
+          try {
+            $ready = $false
+            for ($i = 0; $i -lt 30; $i++) {
+              Start-Sleep -Seconds 1
+              try {
+                $status = Invoke-RestMethod -Uri "http://127.0.0.1:8770/api/status" -TimeoutSec 2
+                if ($status.ok -eq $true) { $ready = $true; break }
+              } catch { }
+            }
+            if (-not $ready) { throw "Servidor local não respondeu em http://127.0.0.1:8770/api/status" }
+            if (-not $status.message.Contains("Informações do PC")) { throw "Resposta de status inesperada." }
+            $command = Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:8770/api/command" -ContentType "application/x-www-form-urlencoded" -Body @{ command = "informações do PC" } -TimeoutSec 5
+            if ($command.ok -ne $true -or -not $command.message.Contains("Informações do PC")) { throw "Teste do endpoint de comandos falhou." }
+            Write-Host "HTTP smoke test: OK"
+          } finally {
+            if ($server -and -not $server.HasExited) { Stop-Process -Id $server.Id -Force -ErrorAction SilentlyContinue }
+          }
+
+      - name: Empacotar instalador Windows com runtime Java
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $programFilesX86 = [Environment]::GetFolderPath("ProgramFilesX86")
+          $wixBins = Get-ChildItem $programFilesX86 -Directory -Filter "WiX Toolset*" -ErrorAction SilentlyContinue |
+            ForEach-Object { Join-Path $_.FullName "bin" } |
+            Where-Object { Test-Path (Join-Path $_ "candle.exe") }
+          $env:PATH = ($wixBins -join ";") + ";" + $env:PATH
+          jpackage --type exe --name NoarMordomo --input build\input --main-jar NoarMordomo.jar --main-class NoarMordomo --add-modules jdk.httpserver,java.desktop --dest dist --app-version 16.0.1 --win-menu --win-shortcut --win-per-user-install
+          if ($LASTEXITCODE -ne 0) { throw "jpackage não conseguiu criar o instalador." }
+          $installer = Get-ChildItem dist -Filter "*.exe" | Select-Object -First 1
+          if (-not $installer) { throw "O instalador EXE não foi encontrado após a compilação." }
+          Write-Host "Instalador gerado: $($installer.FullName)"
+          Get-FileHash $installer.FullName -Algorithm SHA256 | Format-List
+
+      - name: Disponibilizar o EXE como artefato
+        uses: actions/upload-artifact@v4
+        with:
+          name: NoarMordomo-Windows-Installer
+          path: dist/*.exe
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Publicar o instalador na página Releases
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: noar-mordomo-v16.0.1-build-${{ github.run_number }}
+          name: Noar Mordomo V16.0.1 — Build ${{ github.run_number }}
+          body: |
+            Instalador Windows do Noar Mordomo, gerado pelo GitHub Actions.
+
+            Build com autotestes Java e smoke test HTTP. Trata-se do assistente local de comandos; o modelo GGUF e o motor de IA local do Noar V15.1 não estão incluídos.
+
+            Esta versão é experimental e ainda precisa ser validada no computador do usuário.
+          files: dist/*.exe
+          prerelease: true
+          make_latest: false
