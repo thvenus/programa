@@ -10,6 +10,9 @@ function Send-Status([string]$Message) {
 }
 
 $engine = $null
+$script:confidenceThreshold = 0.43
+$script:lastUtterance = ""
+$script:lastUtteranceAt = [DateTime]::MinValue
 try {
     Add-Type -AssemblyName System.Speech
     $recognizers = [System.Speech.Recognition.SpeechRecognitionEngine]::InstalledRecognizers()
@@ -24,6 +27,9 @@ try {
 
     $engine = New-Object System.Speech.Recognition.SpeechRecognitionEngine($recognizerInfo)
     $engine.LoadGrammar((New-Object System.Speech.Recognition.DictationGrammar))
+    $engine.InitialSilenceTimeout = [TimeSpan]::FromSeconds(8)
+    $engine.EndSilenceTimeout = [TimeSpan]::FromMilliseconds(850)
+    $engine.EndSilenceTimeoutAmbiguous = [TimeSpan]::FromMilliseconds(1300)
     $engine.SetInputToDefaultAudioDevice()
     $apiVoice = $ApiRoot.TrimEnd("/") + "/voice"
 
@@ -32,7 +38,11 @@ try {
         try {
             $text = [string]$eventArgs.Result.Text
             $confidence = [double]$eventArgs.Result.Confidence
-            if ([string]::IsNullOrWhiteSpace($text) -or $confidence -lt 0.55) { return }
+            if ([string]::IsNullOrWhiteSpace($text) -or $confidence -lt $script:confidenceThreshold) { return }
+            $now = Get-Date
+            if ($text -eq $script:lastUtterance -and ($now - $script:lastUtteranceAt).TotalMilliseconds -lt 1800) { return }
+            $script:lastUtterance = $text
+            $script:lastUtteranceAt = $now
             Invoke-RestMethod -Uri $apiVoice -Method Post -ContentType "application/x-www-form-urlencoded" -TimeoutSec 4 -Body @{ command = $text; confidence = $confidence.ToString([Globalization.CultureInfo]::InvariantCulture) } | Out-Null
         } catch {
             # Ignore one failed transcription and continue listening.
@@ -45,6 +55,9 @@ try {
         try {
             $control = Invoke-RestMethod -Uri ($ApiRoot.TrimEnd("/") + "/voice-control") -Method Get -TimeoutSec 2
             $shouldListen = [bool]$control.active
+            if ($null -ne $control.confidenceThreshold) {
+                $script:confidenceThreshold = [Math]::Max(0.30, [Math]::Min(0.80, [double]$control.confidenceThreshold))
+            }
             if ($shouldListen -and -not $isListening) {
                 try {
                     $engine.RecognizeAsync([System.Speech.Recognition.RecognizeMode]::Multiple)
