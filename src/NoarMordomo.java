@@ -511,14 +511,13 @@ setInterval(refreshStatus,1800); setInterval(refreshEvents,1100);
 
     private static boolean startsWithWakeWord(String text) {
         String normalized = normalize(text);
-        return normalized.equals("noar") || normalized.startsWith("noar ");
+        return normalized.equals("noar") || startsAny(normalized, "noar ", "noar,", "noar:", "noar;", "noar.", "noar!");
     }
 
     private static String removeWakeWord(String text) {
-        String normalized = normalize(text);
-        if (!normalized.equals("noar") && !normalized.startsWith("noar ")) return text.trim();
+        if (!startsWithWakeWord(text)) return text.trim();
         int index = text.toLowerCase(Locale.ROOT).indexOf("noar");
-        return index < 0 ? text.trim() : text.substring(index + 4).replaceFirst("^[,.:; ]+", "").trim();
+        return index < 0 ? text.trim() : text.substring(index + 4).replaceFirst("^[,.:;!? ]+", "").trim();
     }
 
     private static void handleVoiceCommand(String recognized) {
