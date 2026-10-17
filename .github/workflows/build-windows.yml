@@ -48,6 +48,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "A compilação Java falhou." }
           java --add-modules jdk.httpserver,java.net.http -cp build\classes NoarMordomo --self-test
           if ($LASTEXITCODE -ne 0) { throw "Os autotestes falharam." }
+          powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File src\NoarVoiceListener.ps1 -ListMicrophones
+          if ($LASTEXITCODE -ne 0) { throw "A verificação do enumerador de microfones falhou." }
           jar --create --file build\input\NoarMordomo.jar --main-class NoarMordomo -C build\classes .
           if ($LASTEXITCODE -ne 0) { throw "Não foi possível criar o JAR." }
 
@@ -83,7 +85,7 @@ jobs:
             ForEach-Object { Join-Path $_.FullName "bin" } |
             Where-Object { Test-Path (Join-Path $_ "candle.exe") }
           $env:PATH = ($wixBins -join ";") + ";" + $env:PATH
-          jpackage --type exe --name NoarMordomo --input build\input --main-jar NoarMordomo.jar --main-class NoarMordomo --add-modules jdk.httpserver,java.desktop,java.net.http --dest dist --app-version 18.0.0 --win-menu --win-shortcut --win-per-user-install
+          jpackage --type exe --name NoarMordomo --input build\input --main-jar NoarMordomo.jar --main-class NoarMordomo --add-modules jdk.httpserver,java.desktop,java.net.http --dest dist --app-version 18.1.0 --win-menu --win-shortcut --win-per-user-install
           if ($LASTEXITCODE -ne 0) { throw "jpackage não conseguiu criar o instalador." }
           $installer = Get-ChildItem dist -Filter "*.exe" | Select-Object -First 1
           if (-not $installer) { throw "O instalador EXE não foi encontrado após a compilação." }
@@ -101,12 +103,12 @@ jobs:
       - name: Publicar o instalador na página Releases
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: noar-mordomo-v18.0.0-build-${{ github.run_number }}
-          name: Noar Mordomo V18.0.0 — Painel nativo e voz ajustável — Build ${{ github.run_number }}
+          tag_name: noar-mordomo-v18.1.0-build-${{ github.run_number }}
+          name: Noar Mordomo V18.1.0 — Interface legível e microfone detectável — Build ${{ github.run_number }}
           body: |
-            Instalador Windows do Noar Mordomo V18.0.0 com janela nativa de desktop (não abre o painel no navegador), escuta contínua pelo reconhecimento de voz do Windows, controle ajustável de sensibilidade, retorno falado pelo sintetizador local do Windows, abertura de aplicativos pelo Menu Iniciar, ditado de texto na janela ativa e atalhos comuns de teclado.
+            Instalador Windows do Noar Mordomo V18.1.0 com janela nativa e cores de alto contraste, busca e seleção de microfones ativos pelo Windows Core Audio, teste de captação de voz, escuta contínua, sensibilidade ajustável, resposta falada e abertura de aplicativos.
 
-            O modelo GGUF/motor de IA local não está incluído. Perguntas abertas exigem um servidor de IA local compatível em 127.0.0.1:8080 ou 127.0.0.1:1234.
+            O modelo GGUF/motor de IA local não está incluído. Perguntas abertas exigem um servidor de IA local compatível em 127.0.0.1:8080 ou 127.0.0.1:1234. A seleção de microfone altera a entrada padrão de áudio do Windows.
 
             O build inclui autotestes Java e teste HTTP. O funcionamento real do microfone e das vozes instaladas ainda precisa ser validado no computador do usuário.
           files: dist/*.exe
