@@ -1,34 +1,32 @@
-# Noar Mordomo V17.0.1 — escuta contínua no Windows
+# Noar Mordomo V18.0.0 — painel nativo e voz ajustável
 
-Esta versão atualiza o Noar Mordomo para escutar continuamente pelo reconhecedor de fala do Windows, sem clicar em um botão para iniciar cada fala.
+Esta versão abre uma **janela própria do Windows**, construída como aplicativo de desktop. O painel não é uma página do navegador.
 
-## O que faz
+## Melhorias
 
-- Inicia o serviço local de reconhecimento de voz automaticamente quando o aplicativo abre.
-- Na primeira execução do aplicativo instalado, configura um atalho na pasta Inicializar do usuário para abrir junto com o Windows. O painel permite desligar/ligar essa opção.
-- Mostra um indicador de estado e permite pausar/retomar o microfone a qualquer momento.
-- Reconhece comandos comuns sem botão e sem palavra de ativação, por exemplo abrir aplicativos/pastas, consultar estado, ditar texto e executar atalhos permitidos.
-- Tenta abrir aplicativos instalados que tenham atalhos no Menu Iniciar ou na área de trabalho.
-- Permite ditar texto para a janela que estiver ativa com "digite ...".
-- Permite atalhos usando "pressione Enter", "pressione Tab", "pressione Esc", "pressione Ctrl+L", "pressione Ctrl+F", "pressione Ctrl+T" ou "pressione Alt+Tab".
-- Para perguntas abertas, tenta usar um servidor de IA local compatível com a API OpenAI em `http://127.0.0.1:8080/v1/chat/completions` (por exemplo, llama.cpp) ou `http://127.0.0.1:1234/v1/chat/completions` (por exemplo, LM Studio). Também aceita a variável `NOAR_AI_ENDPOINT`, desde que a URL aponte para `127.0.0.1` ou `localhost`.
+- Janela nativa para digitar comandos, visualizar respostas e acompanhar o que o reconhecimento de voz ouviu.
+- Escuta contínua em segundo plano, com botão para pausar/retomar a qualquer momento.
+- Controle de sensibilidade de 30% a 80%: mais sensível à esquerda, mais seletivo a ruídos à direita.
+- Ajustes de tempo do reconhecedor e filtro de repetições rápidas da mesma transcrição.
+- Respostas faladas usando o sintetizador de voz local do Windows, se disponível.
+- Abertura de aplicativos pelo Menu Iniciar, ditado de texto na janela ativa, atalhos permitidos e informações do PC.
+- Opção de iniciar junto com o Windows.
 
-## Baixar o instalador
+## Baixar e usar
 
-Quando o GitHub Actions terminar com sucesso, abra **Releases** deste repositório e baixe diretamente o instalador EXE. A aba **Actions** mostra o estado e os logs da compilação.
+Quando a compilação terminar, abra **Releases** deste repositório e baixe diretamente o instalador EXE. Instale por cima da versão anterior. O programa abre uma janela própria do Noar e não precisa abrir Chrome/Google para mostrar seu painel.
 
 ## Requisitos e limites
 
-- O instalador inclui o runtime Java, mas não inclui o modelo GGUF nem o motor local do Noar V15.1. Sem um servidor de IA local, o Noar ainda consegue ouvir continuamente e executar os comandos conhecidos, mas não terá raciocínio livre para responder a qualquer pergunta.
-- A escuta contínua requer o mecanismo de reconhecimento de fala do Windows em Português (Brasil). Se o painel indicar que ele está ausente, instale o recurso de voz em português (Brasil) nas Configurações de Idioma/Voz do Windows e reinicie o Noar.
-- O áudio não é salvo em arquivos. A fala é transcrita pelo reconhecimento local do Windows e apenas o texto reconhecido é enviado ao próprio Noar no computador.
-- O ditado usa a área de transferência temporariamente para colar texto na janela ativa e tenta restaurar o conteúdo anterior. Selecione primeiro o campo em que deseja digitar.
-- Atalhos são restritos a uma lista permitida. Comandos de terminal, exclusão de arquivos, formatação e alterações no Registro seguem bloqueados.
-- A abertura automática de aplicativos depende de existir um atalho correspondente no Menu Iniciar ou na área de trabalho. Ações complexas dentro de cada aplicativo exigem integrações específicas ou controle de interface mais avançado.
-- É uma versão experimental: compilação e testes automáticos não substituem a validação do microfone, do idioma de voz e dos aplicativos no PC do usuário.
+- O instalador inclui o runtime Java, mas não inclui o modelo GGUF nem o motor local do Noar V15.1. Sem um servidor de IA local, o Noar entende comandos conhecidos, mas não terá raciocínio livre para responder qualquer pergunta.
+- A escuta requer reconhecimento de fala instalado no Windows, de preferência Português (Brasil), e microfone funcional.
+- O controle de sensibilidade ajuda a equilibrar falas mais baixas e ruído ambiente; não garante reconhecimento perfeito.
+- O áudio não é salvo em arquivos. O reconhecimento é feito pelo mecanismo de voz do Windows e apenas o texto reconhecido é enviado ao serviço local do Noar.
+- Pesquisas e páginas externas continuam abrindo no navegador padrão, mas o painel principal do Noar não depende do navegador.
+- O ditado envia texto para a janela ativa. Para ditar dentro de outro aplicativo, deixe o campo de destino ativo e use o Noar com a janela dele em segundo plano.
+- Comandos de terminal, exclusões e alterações do Registro seguem bloqueados. Ações complexas dentro de qualquer aplicativo podem exigir integração específica.
+- Os testes automáticos não substituem o teste real do microfone, idioma e sintetizador de voz no seu PC.
 
 ## Privacidade e segurança
 
-O serviço web escuta somente em `127.0.0.1:8770`. Nenhum arquivo de áudio é gravado. O log técnico do mecanismo de voz fica em `%LOCALAPPDATA%\NoarMordomo\voice-listener.log` e contém mensagens técnicas, não gravações.
-
-O repositório é público. Não coloque tokens, senhas ou dados pessoais no código.
+O serviço local atende somente em `127.0.0.1:8770`. Não há gravação de áudio. O log técnico da escuta fica em `%LOCALAPPDATA%\NoarMordomo\voice-listener.log` e contém mensagens técnicas, não áudio. O repositório é público; nunca coloque tokens, senhas ou dados privados no código.
