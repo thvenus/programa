@@ -42,9 +42,11 @@ jobs:
         run: |
           $ErrorActionPreference = "Stop"
           New-Item -ItemType Directory -Force build\classes, build\input, dist | Out-Null
-          javac --add-modules jdk.httpserver -encoding UTF-8 -d build\classes src\NoarMordomo.java
+          Copy-Item src\NoarVoiceListener.ps1 build\classes\NoarVoiceListener.ps1
+          Copy-Item src\NoarVoiceListener.ps1 build\input\NoarVoiceListener.ps1
+          javac --add-modules jdk.httpserver,java.net.http -encoding UTF-8 -d build\classes src\NoarMordomo.java
           if ($LASTEXITCODE -ne 0) { throw "A compilação Java falhou." }
-          java --add-modules jdk.httpserver -cp build\classes NoarMordomo --self-test
+          java --add-modules jdk.httpserver,java.net.http -cp build\classes NoarMordomo --self-test
           if ($LASTEXITCODE -ne 0) { throw "Os autotestes falharam." }
           jar --create --file build\input\NoarMordomo.jar --main-class NoarMordomo -C build\classes .
           if ($LASTEXITCODE -ne 0) { throw "Não foi possível criar o JAR." }
@@ -53,7 +55,7 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-          $server = Start-Process -FilePath "java" -ArgumentList @("--add-modules","jdk.httpserver","-cp","build\classes","NoarMordomo","--no-browser") -PassThru -NoNewWindow
+          $server = Start-Process -FilePath "java" -ArgumentList @("--add-modules","jdk.httpserver,java.net.http","-cp","build\classes","NoarMordomo","--no-browser","--no-voice") -PassThru -NoNewWindow
           try {
             $ready = $false
             for ($i = 0; $i -lt 30; $i++) {
@@ -81,7 +83,7 @@ jobs:
             ForEach-Object { Join-Path $_.FullName "bin" } |
             Where-Object { Test-Path (Join-Path $_ "candle.exe") }
           $env:PATH = ($wixBins -join ";") + ";" + $env:PATH
-          jpackage --type exe --name NoarMordomo --input build\input --main-jar NoarMordomo.jar --main-class NoarMordomo --add-modules jdk.httpserver,java.desktop --dest dist --app-version 16.0.1 --win-menu --win-shortcut --win-per-user-install
+          jpackage --type exe --name NoarMordomo --input build\input --main-jar NoarMordomo.jar --main-class NoarMordomo --add-modules jdk.httpserver,java.desktop,java.net.http --dest dist --app-version 17.0.1 --win-menu --win-shortcut --win-per-user-install
           if ($LASTEXITCODE -ne 0) { throw "jpackage não conseguiu criar o instalador." }
           $installer = Get-ChildItem dist -Filter "*.exe" | Select-Object -First 1
           if (-not $installer) { throw "O instalador EXE não foi encontrado após a compilação." }
@@ -99,14 +101,14 @@ jobs:
       - name: Publicar o instalador na página Releases
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: noar-mordomo-v16.0.1-build-${{ github.run_number }}
-          name: Noar Mordomo V16.0.1 — Build ${{ github.run_number }}
+          tag_name: noar-mordomo-v17.0.1-build-${{ github.run_number }}
+          name: Noar Mordomo V17.0.1 — Escuta contínua — Build ${{ github.run_number }}
           body: |
-            Instalador Windows do Noar Mordomo, gerado pelo GitHub Actions.
+            Instalador Windows do Noar Mordomo V17.0.1, com escuta contínua pelo reconhecimento de voz do Windows, abertura de aplicativos pelo Menu Iniciar, ditado de texto na janela ativa e atalhos comuns de teclado.
 
-            Build com autotestes Java e smoke test HTTP. Trata-se do assistente local de comandos; o modelo GGUF e o motor de IA local do Noar V15.1 não estão incluídos.
+            O modelo GGUF/motor de IA local não está incluído. Perguntas abertas exigem um servidor de IA local compatível em 127.0.0.1:8080 ou 127.0.0.1:1234.
 
-            Esta versão é experimental e ainda precisa ser validada no computador do usuário.
+            O build inclui autotestes Java e teste HTTP. Ainda precisa ser validado no microfone e nos aplicativos do computador do usuário.
           files: dist/*.exe
           prerelease: true
           make_latest: false
