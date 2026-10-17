@@ -1,31 +1,34 @@
-# Noar Mordomo — compilação automática para Windows
+# Noar Mordomo V17.0.1 — escuta contínua no Windows
 
-Projeto do Noar Mordomo com compilação de instalador Windows por GitHub Actions.
+Esta versão atualiza o Noar Mordomo para escutar continuamente pelo reconhecedor de fala do Windows, sem clicar em um botão para iniciar cada fala.
 
-## O que inclui esta versão
+## O que faz
 
-- Interface de comandos local no navegador, servida apenas em \`127.0.0.1:8770\`.
-- Abertura de Calculadora, Bloco de Notas, Explorador de Arquivos, Configurações e pastas comuns.
-- Consulta básica de informações do computador.
-- Pesquisa limitada de arquivos em Desktop, Documentos, Downloads e Imagens.
-- Pesquisa na internet usando o navegador padrão.
-- Criação de pastas dentro de \`Documentos\Noar\`.
-- Controles para não executar comandos arbitrários de terminal nem apagar arquivos ou alterar o Registro.
+- Inicia o serviço local de reconhecimento de voz automaticamente quando o aplicativo abre.
+- Na primeira execução do aplicativo instalado, configura um atalho na pasta Inicializar do usuário para abrir junto com o Windows. O painel permite desligar/ligar essa opção.
+- Mostra um indicador de estado e permite pausar/retomar o microfone a qualquer momento.
+- Reconhece comandos comuns sem botão e sem palavra de ativação, por exemplo abrir aplicativos/pastas, consultar estado, ditar texto e executar atalhos permitidos.
+- Tenta abrir aplicativos instalados que tenham atalhos no Menu Iniciar ou na área de trabalho.
+- Permite ditar texto para a janela que estiver ativa com "digite ...".
+- Permite atalhos usando "pressione Enter", "pressione Tab", "pressione Esc", "pressione Ctrl+L", "pressione Ctrl+F", "pressione Ctrl+T" ou "pressione Alt+Tab".
+- Para perguntas abertas, tenta usar um servidor de IA local compatível com a API OpenAI em `http://127.0.0.1:8080/v1/chat/completions` (por exemplo, llama.cpp) ou `http://127.0.0.1:1234/v1/chat/completions` (por exemplo, LM Studio). Também aceita a variável `NOAR_AI_ENDPOINT`, desde que a URL aponte para `127.0.0.1` ou `localhost`.
 
-## Como pegar o instalador EXE
+## Baixar o instalador
 
-Abra **Releases** neste repositório e baixe o arquivo EXE depois que um build terminar com sucesso. O fluxo publica um instalador individual, sem precisar baixar o ZIP do artefato.
+Quando o GitHub Actions terminar com sucesso, abra **Releases** deste repositório e baixe diretamente o instalador EXE. A aba **Actions** mostra o estado e os logs da compilação.
 
-A aba **Actions** mostra o resultado do build e os logs de compilação. Se o workflow falhar, ainda não há um instalador válido.
+## Requisitos e limites
 
-## Limitações
+- O instalador inclui o runtime Java, mas não inclui o modelo GGUF nem o motor local do Noar V15.1. Sem um servidor de IA local, o Noar ainda consegue ouvir continuamente e executar os comandos conhecidos, mas não terá raciocínio livre para responder a qualquer pergunta.
+- A escuta contínua requer o mecanismo de reconhecimento de fala do Windows em Português (Brasil). Se o painel indicar que ele está ausente, instale o recurso de voz em português (Brasil) nas Configurações de Idioma/Voz do Windows e reinicie o Noar.
+- O áudio não é salvo em arquivos. A fala é transcrita pelo reconhecimento local do Windows e apenas o texto reconhecido é enviado ao próprio Noar no computador.
+- O ditado usa a área de transferência temporariamente para colar texto na janela ativa e tenta restaurar o conteúdo anterior. Selecione primeiro o campo em que deseja digitar.
+- Atalhos são restritos a uma lista permitida. Comandos de terminal, exclusão de arquivos, formatação e alterações no Registro seguem bloqueados.
+- A abertura automática de aplicativos depende de existir um atalho correspondente no Menu Iniciar ou na área de trabalho. Ações complexas dentro de cada aplicativo exigem integrações específicas ou controle de interface mais avançado.
+- É uma versão experimental: compilação e testes automáticos não substituem a validação do microfone, do idioma de voz e dos aplicativos no PC do usuário.
 
-- **Não inclui o modelo GGUF ou o motor de IA local do Noar V15.1.** É a versão de assistente local de comandos.
-- A voz depende do suporte do navegador e da permissão do microfone; o reconhecimento de fala pode depender da conexão com a internet.
-- É uma versão experimental. Embora a compilação execute autotestes e um teste HTTP, ainda precisa ser validada no Windows do usuário.
-- Esta é uma reconstrução focada em comandos de sistema para permitir o build; não é o pacote original V16 completo.
-- O repositório é público, conforme autorizado pelo proprietário; o código-fonte pode ser visto por outras pessoas.
+## Privacidade e segurança
 
-## Segurança
+O serviço web escuta somente em `127.0.0.1:8770`. Nenhum arquivo de áudio é gravado. O log técnico do mecanismo de voz fica em `%LOCALAPPDATA%\NoarMordomo\voice-listener.log` e contém mensagens técnicas, não gravações.
 
-O servidor escuta somente em \`127.0.0.1\`, e os comandos disponíveis são uma lista restrita. Não coloque tokens, senhas, chaves ou arquivos pessoais neste repositório.
+O repositório é público. Não coloque tokens, senhas ou dados pessoais no código.
