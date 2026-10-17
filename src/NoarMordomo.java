@@ -60,6 +60,12 @@ public final class NoarMordomo {
     private static volatile boolean installedShortcutsLoaded = false;
     private static volatile double voiceConfidenceThreshold = 0.43;
     private static volatile JTextArea nativeAnswerArea;
+    private static final CopyOnWriteArrayList<AudioInput> AUDIO_INPUTS = new CopyOnWriteArrayList<>();
+    private static volatile String requestedMicrophoneId = "";
+    private static volatile String requestedMicrophoneName = "";
+    private record AudioInput(String id, String name, boolean isDefault) {
+        @Override public String toString() { return name + (isDefault ? "  (padrão do Windows)" : ""); }
+    }
 
     private enum Intent {
         EMPTY, STATUS, CALCULATOR, NOTEPAD, EXPLORER, SETTINGS,
@@ -90,21 +96,32 @@ public final class NoarMordomo {
 
     private static void launchNativePanel() {
         SwingUtilities.invokeLater(() -> {
-            try { UIManager.setLookAndFeel(UIManager.getSystemLookAndFeelClassName()); } catch (Exception ignored) { }
+            try { UIManager.setLookAndFeel(UIManager.getCrossPlatformLookAndFeelClassName()); } catch (Exception ignored) { }
             Color bg = new Color(12, 17, 31);
             Color card = new Color(20, 29, 49);
             Color line = new Color(49, 66, 94);
             Color fg = new Color(235, 242, 255);
             Color muted = new Color(164, 181, 209);
             Color blue = new Color(55, 112, 214);
+            UIManager.put("Panel.background", card);
+            UIManager.put("TabbedPane.background", card);
+            UIManager.put("TabbedPane.foreground", fg);
+            UIManager.put("TabbedPane.selected", blue);
+            UIManager.put("Viewport.background", new Color(9, 14, 26));
+            UIManager.put("ScrollPane.background", new Color(9, 14, 26));
+            UIManager.put("TextArea.background", new Color(9, 14, 26));
+            UIManager.put("TextArea.foreground", fg);
+            UIManager.put("ComboBox.background", new Color(9, 14, 26));
+            UIManager.put("ComboBox.foreground", fg);
 
             JFrame frame = new JFrame("Noar Mordomo");
             frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
-            frame.setMinimumSize(new java.awt.Dimension(740, 640));
-            frame.setSize(900, 740);
+            frame.setMinimumSize(new java.awt.Dimension(800, 700));
+            frame.setSize(960, 820);
             frame.setLocationRelativeTo(null);
 
             JPanel root = new JPanel(new BorderLayout(12, 12));
+            root.setOpaque(true);
             root.setBackground(bg);
             root.setBorder(BorderFactory.createEmptyBorder(18, 18, 18, 18));
 
@@ -125,6 +142,7 @@ public final class NoarMordomo {
             JPanel center = new JPanel(new BorderLayout(10, 10));
             center.setOpaque(false);
             JPanel commandCard = new JPanel(new BorderLayout(8, 8));
+            commandCard.setOpaque(true);
             commandCard.setBackground(card);
             commandCard.setBorder(BorderFactory.createCompoundBorder(
                     BorderFactory.createLineBorder(line, 1, true),
@@ -136,18 +154,19 @@ public final class NoarMordomo {
             input.setFont(new Font("Segoe UI", Font.PLAIN, 14));
             input.setLineWrap(true);
             input.setWrapStyleWord(true);
+            input.setOpaque(true);
             input.setBackground(new Color(9, 14, 26));
             input.setForeground(fg);
             input.setCaretColor(fg);
             input.setBorder(BorderFactory.createEmptyBorder(8, 8, 8, 8));
-            JScrollPane inputScroll = new JScrollPane(input);
-            inputScroll.setBorder(BorderFactory.createLineBorder(line, 1, true));
+            JScrollPane inputScroll = styledScroll(input, new Color(9, 14, 26), line);
 
             JTextArea answer = new JTextArea("Olá! Sou o Noar. O microfone pode ficar ligado enquanto você usa outros programas.");
             answer.setEditable(false);
             answer.setLineWrap(true);
             answer.setWrapStyleWord(true);
             answer.setFont(new Font("Segoe UI", Font.PLAIN, 14));
+            answer.setOpaque(true);
             answer.setBackground(new Color(9, 14, 26));
             answer.setForeground(fg);
             answer.setBorder(BorderFactory.createEmptyBorder(10, 10, 10, 10));
@@ -157,14 +176,18 @@ public final class NoarMordomo {
             activity.setLineWrap(true);
             activity.setWrapStyleWord(true);
             activity.setFont(new Font("Consolas", Font.PLAIN, 12));
+            activity.setOpaque(true);
             activity.setBackground(new Color(9, 14, 26));
             activity.setForeground(muted);
             activity.setBorder(BorderFactory.createEmptyBorder(8, 8, 8, 8));
             JTabbedPane tabs = new JTabbedPane();
-            tabs.addTab("Resposta", new JScrollPane(answer));
-            tabs.addTab("Voz reconhecida e atividade", new JScrollPane(activity));
+            tabs.setOpaque(true);
+            tabs.setBackground(card);
+            tabs.setForeground(fg);
+            tabs.addTab("Resposta do Noar", styledScroll(answer, new Color(9, 14, 26), line));
+            tabs.addTab("O que ele ouviu", styledScroll(activity, new Color(9, 14, 26), line));
 
-            JPanel buttons = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 0));
+            JPanel buttons = new JPanel(new java.awt.GridLayout(0, 4, 6, 6));
             buttons.setOpaque(false);
             JButton send = nativeButton("Enviar comando", blue, fg);
             JButton listen = nativeButton("Pausar microfone", new Color(38, 51, 76), fg);
@@ -175,6 +198,33 @@ public final class NoarMordomo {
             JButton explorer = nativeButton("Explorador", new Color(38, 51, 76), fg);
             buttons.add(send); buttons.add(listen); buttons.add(start); buttons.add(pc);
             buttons.add(calc); buttons.add(notes); buttons.add(explorer);
+
+            JPanel micPanel = new JPanel(new BorderLayout(6, 6));
+            micPanel.setOpaque(true);
+            micPanel.setBackground(card);
+            micPanel.setBorder(BorderFactory.createCompoundBorder(
+                    BorderFactory.createLineBorder(line, 1, true),
+                    BorderFactory.createEmptyBorder(8, 8, 8, 8)));
+            JLabel micLabel = new JLabel("MICROFONE DO WINDOWS");
+            micLabel.setForeground(fg);
+            micLabel.setFont(new Font("Segoe UI", Font.BOLD, 12));
+            JComboBox<AudioInput> microphones = new JComboBox<>();
+            microphones.setBackground(new Color(9, 14, 26));
+            microphones.setForeground(fg);
+            microphones.setOpaque(true);
+            JButton scanMic = nativeButton("Procurar microfones", blue, fg);
+            JButton useMic = nativeButton("Usar selecionado", new Color(34, 105, 77), fg);
+            JButton testMic = nativeButton("Testar microfone", new Color(38, 51, 76), fg);
+            JButton soundSettings = nativeButton("Configurações de Som", new Color(38, 51, 76), fg);
+            JPanel micActions = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 0));
+            micActions.setOpaque(false);
+            micActions.add(scanMic); micActions.add(useMic); micActions.add(testMic); micActions.add(soundSettings);
+            JPanel micCenter = new JPanel(new BorderLayout(6, 6));
+            micCenter.setOpaque(false);
+            micCenter.add(microphones, BorderLayout.CENTER);
+            micCenter.add(micActions, BorderLayout.SOUTH);
+            micPanel.add(micLabel, BorderLayout.NORTH);
+            micPanel.add(micCenter, BorderLayout.CENTER);
 
             JPanel sensitivity = new JPanel(new BorderLayout(6, 3));
             sensitivity.setOpaque(false);
@@ -203,6 +253,8 @@ public final class NoarMordomo {
             commandBottom.setLayout(new BoxLayout(commandBottom, BoxLayout.Y_AXIS));
             commandBottom.add(buttons);
             commandBottom.add(Box.createVerticalStrut(7));
+            commandBottom.add(micPanel);
+            commandBottom.add(Box.createVerticalStrut(7));
             commandBottom.add(sensitivity);
             commandBottom.add(Box.createVerticalStrut(5));
             commandBottom.add(privacy);
@@ -213,6 +265,8 @@ public final class NoarMordomo {
             JLabel status = new JLabel("Iniciando reconhecimento de voz...");
             status.setFont(new Font("Segoe UI", Font.BOLD, 12));
             status.setForeground(new Color(143, 225, 185));
+            status.setOpaque(true);
+            status.setBackground(new Color(22, 51, 49));
             status.setBorder(BorderFactory.createCompoundBorder(
                     BorderFactory.createLineBorder(line, 1, true),
                     BorderFactory.createEmptyBorder(9, 10, 9, 10)));
@@ -241,6 +295,7 @@ public final class NoarMordomo {
                 boolean enabled = !LISTENING_ENABLED.get();
                 LISTENING_ENABLED.set(enabled);
                 voiceStatus = enabled ? "Solicitando escuta contínua..." : "Microfone pausado pelo usuário.";
+                postListeningFlag(enabled);
                 addEvent(enabled ? "SISTEMA: escuta ativada pelo painel." : "SISTEMA: escuta pausada pelo painel.");
             });
             start.addActionListener(e -> {
@@ -250,11 +305,27 @@ public final class NoarMordomo {
                         ? (enabled ? "O Noar será iniciado junto com o Windows." : "A inicialização automática foi desativada.")
                         : "Não consegui alterar o início automático nesta instalação.");
             });
+            scanMic.addActionListener(e -> scanNativeMicrophones(microphones, answer, status));
+            useMic.addActionListener(e -> {
+                AudioInput selected = (AudioInput)microphones.getSelectedItem();
+                if (selected == null || selected.id().isBlank()) { answer.setText("Nenhum microfone selecionado. Clique em Procurar microfones."); return; }
+                Thread worker = new Thread(() -> {
+                    try { String message = postLocalForm("/api/microphone/select", Map.of("id", selected.id())); SwingUtilities.invokeLater(() -> answer.setText(message)); }
+                    catch (Exception ex) { SwingUtilities.invokeLater(() -> answer.setText("Não consegui selecionar esse microfone. Procure novamente e tente mais uma vez.")); }
+                }, "Noar-SelecionarMicrofone");
+                worker.setDaemon(true); worker.start();
+            });
+            testMic.addActionListener(e -> testNativeMicrophone(answer));
+            soundSettings.addActionListener(e -> {
+                try { new ProcessBuilder("powershell.exe", "-NoProfile", "-Command", "Start-Process 'ms-settings:sound'").start(); }
+                catch (Exception ex) { answer.setText("Abra Configurações > Sistema > Som e selecione a entrada correta."); }
+            });
             javax.swing.Timer refresh = new javax.swing.Timer(800, e -> {
                 boolean active = LISTENING_ENABLED.get() && !SPEAKING.get();
                 String mode = active ? "MICROFONE LIGADO" : (SPEAKING.get() ? "NOAR FALANDO" : "MICROFONE PAUSADO");
                 status.setText(mode + "   •   " + voiceStatus);
                 status.setForeground(active ? new Color(143, 225, 185) : new Color(255, 208, 132));
+                status.setBackground(active ? new Color(22, 51, 49) : new Color(68, 48, 30));
                 String log = String.join("\n", EVENTS);
                 if (!log.isBlank() && !log.equals(activity.getText())) {
                     activity.setText(log);
@@ -266,7 +337,19 @@ public final class NoarMordomo {
             refresh.start();
             frame.setContentPane(root);
             frame.setVisible(true);
+            scanNativeMicrophones(microphones, answer, status);
         });
+    }
+
+    private static JScrollPane styledScroll(JTextArea area, Color background, Color border) {
+        JScrollPane scroll = new JScrollPane(area);
+        scroll.setOpaque(true);
+        scroll.setBackground(background);
+        scroll.getViewport().setOpaque(true);
+        scroll.getViewport().setBackground(background);
+        scroll.setBorder(BorderFactory.createLineBorder(border, 1, true));
+        scroll.getVerticalScrollBar().setUnitIncrement(16);
+        return scroll;
     }
 
     private static JButton nativeButton(String label, Color background, Color foreground) {
@@ -277,6 +360,117 @@ public final class NoarMordomo {
         b.setForeground(foreground);
         b.setMargin(new Insets(8, 10, 8, 10));
         return b;
+    }
+
+    private static void scanNativeMicrophones(JComboBox<AudioInput> combo, JTextArea answer, JLabel status) {
+        combo.removeAllItems();
+        combo.addItem(new AudioInput("", "Procurando entradas de áudio…", false));
+        Thread worker = new Thread(() -> {
+            try {
+                Path script = locateVoiceScript();
+                if (script == null) throw new IOException("O arquivo de diagnóstico de áudio não foi encontrado.");
+                Process process = new ProcessBuilder("powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+                        "-File", script.toString(), "-ListMicrophones").redirectErrorStream(true).start();
+                if (!process.waitFor(12, TimeUnit.SECONDS)) { process.destroyForcibly(); throw new IOException("A busca de microfones demorou demais."); }
+                String output = new String(process.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
+                if (process.exitValue() != 0) throw new IOException(output.isBlank() ? "O Windows não conseguiu enumerar os dispositivos de áudio." : output.trim());
+                List<AudioInput> found = new ArrayList<>();
+                for (String line : output.split("\\R")) {
+                    if (!line.startsWith("MIC\t")) continue;
+                    String[] parts = line.split("\t", -1);
+                    if (parts.length < 4) continue;
+                    String id = new String(Base64.getDecoder().decode(parts[1]), StandardCharsets.UTF_8);
+                    String name = new String(Base64.getDecoder().decode(parts[2]), StandardCharsets.UTF_8);
+                    found.add(new AudioInput(id, name, Boolean.parseBoolean(parts[3])));
+                }
+                AUDIO_INPUTS.clear();
+                AUDIO_INPUTS.addAll(found);
+                SwingUtilities.invokeLater(() -> {
+                    combo.removeAllItems();
+                    for (AudioInput device : found) combo.addItem(device);
+                    if (found.isEmpty()) {
+                        combo.addItem(new AudioInput("", "Nenhum microfone ativo encontrado", false));
+                        answer.setText("Não encontrei entradas de áudio ativas. Conecte ou habilite um microfone e confira as permissões do Windows.");
+                        status.setText("NENHUM MICROFONE DETECTADO");
+                    } else {
+                        for (int i = 0; i < found.size(); i++) if (found.get(i).isDefault()) { combo.setSelectedIndex(i); break; }
+                        answer.setText("Busca concluída: " + found.size() + " entrada(s) ativa(s). Escolha o microfone e clique em Usar selecionado.");
+                        addEvent("SISTEMA: busca encontrou " + found.size() + " entrada(s) de áudio.");
+                    }
+                });
+            } catch (Exception ex) {
+                SwingUtilities.invokeLater(() -> {
+                    combo.removeAllItems();
+                    combo.addItem(new AudioInput("", "Falha ao procurar microfones", false));
+                    answer.setText("Erro ao procurar microfones: " + ex.getMessage());
+                    status.setText("FALHA NA BUSCA DE MICROFONES");
+                });
+            }
+        }, "Noar-BuscaMicrofones");
+        worker.setDaemon(true);
+        worker.start();
+    }
+
+    private static void testNativeMicrophone(JTextArea answer) {
+        Thread worker = new Thread(() -> {
+            boolean resume = LISTENING_ENABLED.get();
+            try {
+                LISTENING_ENABLED.set(false);
+                postListeningFlag(false);
+                SwingUtilities.invokeLater(() -> answer.setText("Teste iniciado: fale perto do microfone agora…"));
+                Path script = locateVoiceScript();
+                if (script == null) throw new IOException("O arquivo de voz não foi encontrado.");
+                Process process = new ProcessBuilder("powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+                        "-File", script.toString(), "-TestMicrophone").redirectErrorStream(true).start();
+                if (!process.waitFor(13, TimeUnit.SECONDS)) { process.destroyForcibly(); throw new IOException("O teste excedeu o tempo permitido."); }
+                String output = new String(process.getInputStream().readAllBytes(), StandardCharsets.UTF_8).trim();
+                String resultText = "O teste não conseguiu capturar uma frase.";
+                if (output.contains("NO_SPEECH")) resultText = "O microfone abriu, mas nenhuma frase foi reconhecida. Fale mais perto e confira o volume de entrada.";
+                else if (output.contains("RESULT\t")) {
+                    for (String line : output.split("\\R")) {
+                        if (!line.startsWith("RESULT\t")) continue;
+                        String[] parts = line.split("\t", -1);
+                        if (parts.length >= 3) {
+                            String words = new String(Base64.getDecoder().decode(parts[1]), StandardCharsets.UTF_8);
+                            resultText = "Microfone funcionando! O Windows reconheceu: “" + words + "” (confiança " + parts[2] + ").";
+                        }
+                    }
+                } else if (output.contains("ERROR:")) {
+                    for (String line : output.split("\\R")) if (line.startsWith("ERROR:")) resultText = "Teste de voz falhou: " + line.substring(6);
+                }
+                String finalText = resultText;
+                addEvent("TESTE DE MICROFONE: " + finalText);
+                SwingUtilities.invokeLater(() -> answer.setText(finalText));
+            } catch (Exception ex) {
+                SwingUtilities.invokeLater(() -> answer.setText("Não consegui testar o microfone: " + ex.getMessage()));
+            } finally {
+                LISTENING_ENABLED.set(resume);
+                postListeningFlag(resume);
+            }
+        }, "Noar-TestarMicrofone");
+        worker.setDaemon(true);
+        worker.start();
+    }
+
+    private static void postListeningFlag(boolean active) {
+        try { postLocalForm("/api/listening", Map.of("active", Boolean.toString(active))); } catch (Exception ignored) { }
+    }
+
+    private static String postLocalForm(String endpoint, Map<String, String> form) throws Exception {
+        StringBuilder body = new StringBuilder();
+        for (Map.Entry<String, String> entry : form.entrySet()) {
+            if (body.length() > 0) body.append('&');
+            body.append(URLEncoder.encode(entry.getKey(), StandardCharsets.UTF_8)).append('=')
+                    .append(URLEncoder.encode(entry.getValue(), StandardCharsets.UTF_8));
+        }
+        HttpClient client = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(2)).build();
+        HttpRequest request = HttpRequest.newBuilder(URI.create("http://" + HOST + ":" + PORT + endpoint))
+                .timeout(Duration.ofSeconds(5)).header("Content-Type", "application/x-www-form-urlencoded;charset=UTF-8")
+                .POST(HttpRequest.BodyPublishers.ofString(body.toString(), StandardCharsets.UTF_8)).build();
+        HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+        if (response.statusCode() < 200 || response.statusCode() >= 300) throw new IOException("Erro HTTP " + response.statusCode() + " no serviço local.");
+        String message = extractJsonString(response.body(), "message");
+        return message != null ? message : response.body();
     }
 
     private static void runNativeCommand(String command, JTextArea answer) {
@@ -337,6 +531,26 @@ public final class NoarMordomo {
             }
             if ("/api/events".equals(path) && "GET".equalsIgnoreCase(exchange.getRequestMethod())) {
                 sendJson(exchange, 200, eventsJson());
+                return;
+            }
+            if ("/api/microphone/select".equals(path) && "POST".equalsIgnoreCase(exchange.getRequestMethod())) {
+                if (!trustedOrigin(exchange)) {
+                    sendJson(exchange, 403, "{\"ok\":false,\"message\":\"Origem não permitida.\"}");
+                    return;
+                }
+                Map<String, String> form = parseForm(new String(exchange.getRequestBody().readNBytes(8193), StandardCharsets.UTF_8));
+                String id = form.getOrDefault("id", "");
+                AudioInput selected = AUDIO_INPUTS.stream().filter(m -> m.id().equals(id)).findFirst().orElse(null);
+                if (selected == null) {
+                    sendJson(exchange, 400, "{\"ok\":false,\"message\":\"Microfone fora da lista. Clique em Procurar microfones novamente.\"}");
+                    return;
+                }
+                requestedMicrophoneId = selected.id();
+                requestedMicrophoneName = selected.name();
+                voiceStatus = "Solicitando ativação de: " + selected.name();
+                addEvent("SISTEMA: escolhido o microfone " + selected.name() + ".");
+                String message = "Microfone escolhido: " + selected.name() + ". O Noar está pedindo ao Windows para usá-lo. Clique em Testar microfone para confirmar.";
+                sendJson(exchange, 200, "{\"ok\":true,\"message\":\"" + jsonEscape(message) + "\"}");
                 return;
             }
             if ("/api/voice-status".equals(path) && "POST".equalsIgnoreCase(exchange.getRequestMethod())) {
@@ -861,6 +1075,8 @@ public final class NoarMordomo {
         return "{\"ok\":true,\"active\":" + (LISTENING_ENABLED.get() && !SPEAKING.get()) +
                 ",\"listeningEnabled\":" + LISTENING_ENABLED.get() + ",\"speaking\":" + SPEAKING.get() +
                 ",\"confidenceThreshold\":" + String.format(Locale.ROOT, "%.2f", voiceConfidenceThreshold) +
+                ",\"microphoneId\":\"" + jsonEscape(requestedMicrophoneId) + "\"" +
+                ",\"microphoneName\":\"" + jsonEscape(requestedMicrophoneName) + "\"" +
                 ",\"voiceStatus\":\"" + jsonEscape(voiceStatus) + "\"}";
     }
 
