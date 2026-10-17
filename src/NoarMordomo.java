@@ -2,23 +2,41 @@ import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
 
 import java.awt.Desktop;
+import java.awt.GraphicsEnvironment;
+import java.awt.Robot;
+import java.awt.Toolkit;
+import java.awt.datatransfer.Clipboard;
+import java.awt.datatransfer.StringSelection;
+import java.awt.datatransfer.Transferable;
+import java.awt.event.KeyEvent;
+import java.io.File;
 import java.io.IOException;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.URI;
 import java.net.URLDecoder;
 import java.net.URLEncoder;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.text.Normalizer;
+import java.time.Duration;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
+import java.util.Base64;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import java.util.stream.Stream;
 
 public final class NoarMordomo {
@@ -27,6 +45,13 @@ public final class NoarMordomo {
     private static final String APP_NAME = "Noar Mordomo";
     private static final DateTimeFormatter DATE_FORMAT =
             DateTimeFormatter.ofPattern("dd/MM/yyyy HH:mm:ss");
+    private static final AtomicBoolean LISTENING_ENABLED = new AtomicBoolean(true);
+    private static final AtomicBoolean SPEAKING = new AtomicBoolean(false);
+    private static final CopyOnWriteArrayList<String> EVENTS = new CopyOnWriteArrayList<>();
+    private static volatile String voiceStatus = "Iniciando escuta contínua...";
+    private static volatile Process voiceProcess;
+    private static volatile List<Path> installedShortcutsCache = List.of();
+    private static volatile boolean installedShortcutsLoaded = false;
 
     private static final String PAGE = """
 <!doctype html>
@@ -52,10 +77,10 @@ label{display:block;font-weight:600;margin-bottom:10px}textarea{width:100%;min-h
 <header><div class="logo" aria-hidden="true">✦</div><div><h1>Noar Mordomo</h1><p>Seu assistente local para Windows</p></div></header>
 <section class="card">
 <div class="status"><span class="dot"></span><span id="statusLine">Conectado ao assistente local</span></div>
-<p>Digite um comando ou use sua voz. Exemplo: <b>“abrir calculadora”</b>.</p>
+<p>O microfone fica <b>escutando continuamente</b>, mesmo quando você está usando outros programas. Exemplo: “abrir Chrome”, “digite olá” ou “Noar, me explique isso”.</p>
 <label for="command">O que você quer que eu faça?</label>
-<textarea id="command" rows="3" placeholder="Digite aqui ou clique em Falar..."></textarea>
-<div class="buttons"><button class="primary" id="send">Executar comando</button><button id="talk">🎙 Falar</button><button id="system">Informações do PC</button></div>
+<textarea id="command" rows="3" placeholder="Digite aqui ou fale um comando a qualquer momento..."></textarea>
+<div class="buttons"><button class="primary" id="send">Executar comando digitado</button><button id="listenToggle">Pausar microfone</button><button id="autostartToggle">Início com Windows</button><button id="system">Informações do PC</button></div>
 <div class="quick">
 <button data-cmd="abrir calculadora">Calculadora</button><button data-cmd="abrir bloco de notas">Bloco de Notas</button><button data-cmd="abrir explorador de arquivos">Explorador</button><button data-cmd="abrir downloads">Downloads</button><button data-cmd="abrir documentos">Documentos</button>
 </div>
@@ -63,51 +88,74 @@ label{display:block;font-weight:600;margin-bottom:10px}textarea{width:100%;min-h
 </section>
 <section class="card">
 <b>Comandos disponíveis</b>
-<p>Abra aplicativos e pastas, consulte informações básicas do computador, pesquise arquivos pelo nome, pesquise na internet ou crie uma pasta dentro de Documentos\\Noar.</p>
-<p class="warn">Por segurança, não executo comandos de terminal, não apago arquivos e não altero o Registro do Windows.</p>
+<p>O Noar pode abrir aplicativos instalados que tenham atalhos no Menu Iniciar, ditar texto na janela ativa, pressionar atalhos de teclado e consultar o computador. Para perguntas abertas, pode usar um motor de IA local compatível rodando em <code>127.0.0.1:8080</code> ou <code>127.0.0.1:1234</code>.</p>
+<p class="warn">O microfone não grava arquivos de áudio: o reconhecimento é feito pelo mecanismo de voz do Windows e apenas o texto reconhecido é enviado ao Noar local. Você pode pausar a escuta. Comandos de terminal, exclusões e alterações do Registro continuam bloqueados.</p>
 </section>
-<div class="foot">O painel funciona neste computador em 127.0.0.1. A função de voz depende do navegador e da permissão do microfone.</div>
+<div class="foot">Escuta contínua pelo Windows Speech. O reconhecimento exige o recurso de voz em português (Brasil) instalado no Windows. O serviço local não grava áudio.</div>
 </main>
 <script>
 const $=id=>document.getElementById(id);
+let lastSpokenEvent=''; let eventsInitialized=false;
+function speakText(text){
+  if(!text || !('speechSynthesis' in window)) return;
+  fetch('/api/speaking',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded;charset=UTF-8'},body:new URLSearchParams({active:'true'})}).catch(()=>{});
+  speechSynthesis.cancel();
+  const u=new SpeechSynthesisUtterance(text.slice(0,260)); u.lang='pt-BR';
+  const finish=()=>fetch('/api/speaking',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded;charset=UTF-8'},body:new URLSearchParams({active:'false'})}).catch(()=>{});
+  u.onend=finish; u.onerror=finish; speechSynthesis.speak(u);
+}
 async function execute(command){
   if(!command.trim()){ $('answer').textContent='Digite um comando primeiro.'; return; }
-  $('send').disabled=true;
-  $('answer').textContent='Processando...';
+  $('send').disabled=true; $('answer').textContent='Processando...';
   try{
     const response=await fetch('/api/command',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded;charset=UTF-8'},body:new URLSearchParams({command})});
-    const data=await response.json();
-    $('answer').textContent=data.message||'Comando recebido.';
-    if(data.ok && 'speechSynthesis' in window && data.speak!==false){
-      speechSynthesis.cancel();
-      const utterance=new SpeechSynthesisUtterance(data.message||'Pronto');
-      utterance.lang='pt-BR'; speechSynthesis.speak(utterance);
-    }
+    const data=await response.json(); $('answer').textContent=data.message||'Comando recebido.';
+    if(data.ok && data.speak!==false) speakText(data.message||'Pronto');
   }catch(e){$('answer').textContent='Não consegui falar com o Noar. Feche e abra o programa novamente.';}
   finally{$('send').disabled=false;}
+}
+async function refreshStatus(){
+  try{
+    const s=await (await fetch('/api/status')).json();
+    $('statusLine').textContent=s.voiceStatus+' · '+(s.listening?'microfone ligado':'microfone pausado');
+    $('listenToggle').dataset.active=String(s.listening);
+    $('listenToggle').textContent=s.listening?'Pausar microfone':'Retomar microfone';
+    $('autostartToggle').dataset.enabled=String(s.autostart);
+    $('autostartToggle').textContent=s.autostart?'Início com Windows: ligado':'Início com Windows: desligado';
+  }catch(e){$('statusLine').textContent='Conectando ao serviço local...';}
+}
+async function refreshEvents(){
+  try{
+    const d=await (await fetch('/api/events')).json(); const events=d.events||[];
+    if(events.length) $('answer').textContent=events.slice(-12).join('\n');
+    const speech=events.filter(x=>x.startsWith('FALAR: ')).at(-1);
+    if(!eventsInitialized){lastSpokenEvent=speech||'';eventsInitialized=true;}
+    else if(speech && speech!==lastSpokenEvent){lastSpokenEvent=speech;speakText(speech.slice(7));}
+  }catch(e){}
 }
 $('send').addEventListener('click',()=>execute($('command').value));
 $('command').addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();execute($('command').value);}});
 $('system').addEventListener('click',()=>execute('informações do sistema'));
-document.querySelectorAll('[data-cmd]').forEach(b=>b.addEventListener('click',()=>{ $('command').value=b.dataset.cmd; execute(b.dataset.cmd); }));
-$('talk').addEventListener('click',()=>{
- const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
- if(!SR){$('answer').textContent='Seu navegador não oferece reconhecimento de voz aqui. Use o Chrome ou Edge atualizado, ou digite o comando.';return;}
- const recognition=new SR(); recognition.lang='pt-BR'; recognition.interimResults=false; recognition.maxAlternatives=1;
- $('talk').disabled=true; $('answer').textContent='Estou ouvindo...';
- recognition.onresult=e=>{const words=e.results[0][0].transcript;$('command').value=words;execute(words);};
- recognition.onerror=e=>{$('answer').textContent='Não consegui reconhecer a voz ('+e.error+'). Verifique a permissão do microfone.';};
- recognition.onend=()=>{$('talk').disabled=false;};
- try{recognition.start();}catch(e){$('talk').disabled=false;$('answer').textContent='Não foi possível iniciar o microfone. Tente novamente.';}
+$('listenToggle').addEventListener('click',async()=>{
+ const enabled=$('listenToggle').dataset.active!=='true';
+ await fetch('/api/listening',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded;charset=UTF-8'},body:new URLSearchParams({active:String(enabled)})});
+ refreshStatus();
 });
-fetch('/api/status').then(r=>r.json()).then(s=>{$('statusLine').textContent=s.platform+' · serviço local ativo';}).catch(()=>{$('statusLine').textContent='Conectando ao serviço local...';});
+$('autostartToggle').addEventListener('click',async()=>{
+ const enabled=$('autostartToggle').dataset.enabled!=='true';
+ const r=await fetch('/api/autostart',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded;charset=UTF-8'},body:new URLSearchParams({active:String(enabled)})});
+ const d=await r.json(); $('answer').textContent=d.message; refreshStatus();
+});
+document.querySelectorAll('[data-cmd]').forEach(b=>b.addEventListener('click',()=>{ $('command').value=b.dataset.cmd; execute(b.dataset.cmd); }));
+refreshStatus(); refreshEvents();
+setInterval(refreshStatus,1800); setInterval(refreshEvents,1100);
 </script></body></html>
 """;
 
     private enum Intent {
         EMPTY, STATUS, CALCULATOR, NOTEPAD, EXPLORER, SETTINGS,
         DOWNLOADS, DOCUMENTS, DESKTOP, SEARCH_FILES, SEARCH_WEB,
-        CREATE_FOLDER, BLOCKED, UNKNOWN
+        CREATE_FOLDER, TYPE_TEXT, PRESS_KEY, BLOCKED, UNKNOWN
     }
 
     public static void main(String[] args) throws Exception {
@@ -116,10 +164,17 @@ fetch('/api/status').then(r=>r.json()).then(s=>{$('statusLine').textContent=s.pl
             return;
         }
         boolean noBrowser = List.of(args).contains("--no-browser");
+        boolean noVoice = List.of(args).contains("--no-voice");
         HttpServer server = HttpServer.create(new InetSocketAddress(InetAddress.getByName(HOST), PORT), 0);
-        server.setExecutor(Executors.newFixedThreadPool(6));
+        server.setExecutor(Executors.newFixedThreadPool(8));
         server.createContext("/", NoarMordomo::handle);
         server.start();
+        Runtime.getRuntime().addShutdownHook(new Thread(NoarMordomo::stopVoiceListener));
+        if (!noVoice) startVoiceListener();
+        if (isPackagedWindowsApp() && !isAutoStartEnabled()) {
+            boolean enabled = setAutoStart(true);
+            if (enabled) addEvent("SISTEMA: Noar configurado para iniciar com o Windows e escutar continuamente.");
+        }
         URI uri = URI.create("http://" + HOST + ":" + PORT + "/");
         System.out.println(APP_NAME + " ativo em " + uri);
         if (!noBrowser) {
@@ -146,10 +201,72 @@ fetch('/api/status').then(r=>r.json()).then(s=>{$('statusLine').textContent=s.pl
                 sendJson(exchange, 200, statusJson());
                 return;
             }
+            if ("/api/voice-control".equals(path) && "GET".equalsIgnoreCase(exchange.getRequestMethod())) {
+                sendJson(exchange, 200, voiceControlJson());
+                return;
+            }
+            if ("/api/events".equals(path) && "GET".equalsIgnoreCase(exchange.getRequestMethod())) {
+                sendJson(exchange, 200, eventsJson());
+                return;
+            }
+            if ("/api/voice-status".equals(path) && "POST".equalsIgnoreCase(exchange.getRequestMethod())) {
+                String body = new String(exchange.getRequestBody().readNBytes(4096), StandardCharsets.UTF_8);
+                voiceStatus = parseForm(body).getOrDefault("status", "Status de voz não informado.");
+                sendJson(exchange, 200, "{\"ok\":true}");
+                return;
+            }
+            if ("/api/listening".equals(path) && "POST".equalsIgnoreCase(exchange.getRequestMethod())) {
+                if (!trustedOrigin(exchange)) {
+                    sendJson(exchange, 403, "{\"ok\":false,\"message\":\"Origem não permitida.\"}");
+                    return;
+                }
+                Map<String, String> form = parseForm(new String(exchange.getRequestBody().readNBytes(4096), StandardCharsets.UTF_8));
+                boolean active = Boolean.parseBoolean(form.getOrDefault("active", "true"));
+                LISTENING_ENABLED.set(active);
+                voiceStatus = active ? "Solicitando escuta contínua..." : "Microfone pausado pelo usuário.";
+                addEvent(active ? "SISTEMA: escuta ativada." : "SISTEMA: escuta pausada pelo usuário.");
+                sendJson(exchange, 200, voiceControlJson());
+                return;
+            }
+            if ("/api/speaking".equals(path) && "POST".equalsIgnoreCase(exchange.getRequestMethod())) {
+                Map<String, String> form = parseForm(new String(exchange.getRequestBody().readNBytes(4096), StandardCharsets.UTF_8));
+                SPEAKING.set(Boolean.parseBoolean(form.getOrDefault("active", "false")));
+                sendJson(exchange, 200, voiceControlJson());
+                return;
+            }
+            if ("/api/autostart".equals(path) && "POST".equalsIgnoreCase(exchange.getRequestMethod())) {
+                if (!trustedOrigin(exchange)) {
+                    sendJson(exchange, 403, "{\"ok\":false,\"message\":\"Origem não permitida.\"}");
+                    return;
+                }
+                Map<String, String> form = parseForm(new String(exchange.getRequestBody().readNBytes(4096), StandardCharsets.UTF_8));
+                boolean active = Boolean.parseBoolean(form.getOrDefault("active", "false"));
+                boolean success = setAutoStart(active);
+                String message = success
+                        ? (active ? "O Noar será iniciado junto com o Windows." : "A inicialização automática foi desativada.")
+                        : "Não consegui alterar a inicialização automática nesta instalação.";
+                sendJson(exchange, success ? 200 : 500,
+                        "{\"ok\":" + success + ",\"autostart\":" + isAutoStartEnabled() +
+                                ",\"message\":\"" + jsonEscape(message) + "\"}");
+                return;
+            }
+            if ("/api/voice".equals(path) && "POST".equalsIgnoreCase(exchange.getRequestMethod())) {
+                if (!trustedOrigin(exchange)) {
+                    sendJson(exchange, 403, "{\"ok\":false,\"message\":\"Origem não permitida.\"}");
+                    return;
+                }
+                byte[] body = exchange.getRequestBody().readNBytes(8193);
+                if (body.length > 8192) {
+                    sendJson(exchange, 413, "{\"ok\":false,\"message\":\"Fala reconhecida muito longa.\"}");
+                    return;
+                }
+                String spoken = parseForm(new String(body, StandardCharsets.UTF_8)).getOrDefault("command", "");
+                handleVoiceCommand(spoken);
+                sendJson(exchange, 200, "{\"ok\":true}");
+                return;
+            }
             if ("/api/command".equals(path) && "POST".equalsIgnoreCase(exchange.getRequestMethod())) {
-                String origin = exchange.getRequestHeaders().getFirst("Origin");
-                if (origin != null && !origin.equals("http://" + HOST + ":" + PORT)
-                        && !origin.equals("http://localhost:" + PORT)) {
+                if (!trustedOrigin(exchange)) {
                     sendJson(exchange, 403, "{\"ok\":false,\"message\":\"Origem não permitida.\"}");
                     return;
                 }
@@ -198,11 +315,19 @@ fetch('/api/status').then(r=>r.json()).then(s=>{$('statusLine').textContent=s.pl
                 case SEARCH_WEB -> openWebSearch(extractWebQuery(original));
                 case CREATE_FOLDER -> createFolder(extractTail(original, List.of(
                         "criar pasta", "crie pasta", "crie uma pasta", "criar uma pasta")));
+                case TYPE_TEXT -> typeText(extractTail(original, List.of("digite ", "escreva ", "escreve ", "dite ", "ditar ")));
+                case PRESS_KEY -> pressKey(extractTail(original, List.of("pressione tecla ", "pressione ", "aperte tecla ", "aperte ", "aperta ", "tecla ")));
                 case BLOCKED -> new CommandResult(false,
                         "Por segurança, não executo comandos arbitrários nem ações destrutivas. Posso abrir aplicativos, pastas e pesquisas.");
                 case EMPTY -> new CommandResult(false, "Digite um comando para eu ajudar.");
-                case UNKNOWN -> new CommandResult(false,
-                        "Ainda não reconheço esse comando. Experimente: abrir calculadora, abrir downloads, informações do sistema, pesquisar arquivos nome ou pesquisar na internet assunto.");
+                case UNKNOWN -> {
+                    CommandResult app = tryLaunchInstalledApp(original);
+                    if (app.ok) yield app;
+                    String answer = askLocalAI(original);
+                    if (answer != null) yield new CommandResult(true, answer);
+                    yield new CommandResult(false,
+                            "Ainda não reconheço essa ação. Posso abrir aplicativos pelo nome do Menu Iniciar, ditar texto na janela ativa e pressionar atalhos de teclado. Perguntas abertas precisam de um motor de IA local ligado em 127.0.0.1:8080 ou 127.0.0.1:1234.");
+                }
             };
         } catch (Exception ex) {
             return new CommandResult(false, "Não consegui concluir a ação. Verifique se o aplicativo ou a pasta está disponível.");
@@ -232,7 +357,372 @@ fetch('/api/status').then(r=>r.json()).then(s=>{$('statusLine').textContent=s.pl
         if (startsAny(text, "pesquisar na internet", "buscar na internet", "pesquisar no google",
                 "pesquisar web", "pesquise ", "pesquisar:")) return Intent.SEARCH_WEB;
         if (startsAny(text, "criar pasta", "crie pasta", "crie uma pasta", "criar uma pasta")) return Intent.CREATE_FOLDER;
+        if (startsAny(text, "digite ", "escreva ", "escreve ", "dite ", "ditar ")) return Intent.TYPE_TEXT;
+        if (startsAny(text, "pressione ", "pressione tecla ", "aperte ", "aperte tecla ", "aperta ", "tecla ")) return Intent.PRESS_KEY;
         return Intent.UNKNOWN;
+    }
+
+    private static CommandResult typeText(String value) {
+        if (value == null || value.isBlank()) return new CommandResult(false, "Diga o texto depois de “digite”.");
+        if (GraphicsEnvironment.isHeadless()) return new CommandResult(false, "Não há uma área de trabalho ativa para digitar texto.");
+        Clipboard clipboard = Toolkit.getDefaultToolkit().getSystemClipboard();
+        Transferable previous = null;
+        try {
+            previous = clipboard.getContents(null);
+            clipboard.setContents(new StringSelection(value), null);
+            Robot robot = new Robot();
+            robot.setAutoDelay(35);
+            robot.delay(250);
+            robot.keyPress(KeyEvent.VK_CONTROL);
+            robot.keyPress(KeyEvent.VK_V);
+            robot.keyRelease(KeyEvent.VK_V);
+            robot.keyRelease(KeyEvent.VK_CONTROL);
+            robot.delay(350);
+            if (previous != null) {
+                try { clipboard.setContents(previous, null); } catch (IllegalStateException ignored) { }
+            }
+            return new CommandResult(true, "Texto enviado para a janela ativa.");
+        } catch (Exception ex) {
+            if (previous != null) {
+                try { clipboard.setContents(previous, null); } catch (Exception ignored) { }
+            }
+            return new CommandResult(false, "Não consegui digitar no aplicativo ativo. Clique primeiro no campo de texto e tente novamente.");
+        }
+    }
+
+    private static CommandResult pressKey(String requested) {
+        String key = normalize(requested).replace(" ", "");
+        int keyCode;
+        boolean control = false;
+        boolean alt = false;
+        switch (key) {
+            case "enter", "entrar" -> keyCode = KeyEvent.VK_ENTER;
+            case "tab" -> keyCode = KeyEvent.VK_TAB;
+            case "esc", "escape" -> keyCode = KeyEvent.VK_ESCAPE;
+            case "espaco", "space" -> keyCode = KeyEvent.VK_SPACE;
+            case "backspace", "retrocesso" -> keyCode = KeyEvent.VK_BACK_SPACE;
+            case "ctrl+l", "control+l" -> { keyCode = KeyEvent.VK_L; control = true; }
+            case "ctrl+f", "control+f" -> { keyCode = KeyEvent.VK_F; control = true; }
+            case "ctrl+t", "control+t" -> { keyCode = KeyEvent.VK_T; control = true; }
+            case "ctrl+c", "control+c" -> { keyCode = KeyEvent.VK_C; control = true; }
+            case "ctrl+v", "control+v" -> { keyCode = KeyEvent.VK_V; control = true; }
+            case "ctrl+a", "control+a" -> { keyCode = KeyEvent.VK_A; control = true; }
+            case "alt+tab" -> { keyCode = KeyEvent.VK_TAB; alt = true; }
+            case "setaparacima", "cima", "up" -> keyCode = KeyEvent.VK_UP;
+            case "setaparabaixo", "baixo", "down" -> keyCode = KeyEvent.VK_DOWN;
+            case "setaparaesquerda", "esquerda", "left" -> keyCode = KeyEvent.VK_LEFT;
+            case "setaparadireita", "direita", "right" -> keyCode = KeyEvent.VK_RIGHT;
+            default -> { return new CommandResult(false, "Atalho não permitido. Tente Enter, Tab, Esc, Espaço, Backspace, Ctrl+L, Ctrl+F, Ctrl+T ou Alt+Tab."); }
+        }
+        if (GraphicsEnvironment.isHeadless()) return new CommandResult(false, "Não há uma janela ativa para enviar o atalho.");
+        try {
+            Robot robot = new Robot();
+            robot.setAutoDelay(35);
+            if (control) robot.keyPress(KeyEvent.VK_CONTROL);
+            if (alt) robot.keyPress(KeyEvent.VK_ALT);
+            robot.keyPress(keyCode);
+            robot.keyRelease(keyCode);
+            if (alt) robot.keyRelease(KeyEvent.VK_ALT);
+            if (control) robot.keyRelease(KeyEvent.VK_CONTROL);
+            return new CommandResult(true, "Atalho de teclado enviado para a janela ativa.");
+        } catch (Exception ex) {
+            return new CommandResult(false, "Não consegui enviar esse atalho para a janela ativa.");
+        }
+    }
+
+    private static String extractAppLaunchTarget(String original) {
+        String normalized = normalize(original);
+        List<String> prefixes = List.of("abrir o aplicativo ", "abra o aplicativo ", "abra o ", "abrir o ",
+                "abre o ", "iniciar o ", "inicie o ", "executar o ", "execute o ",
+                "abrir ", "abra ", "abre ", "iniciar ", "inicie ", "executar ", "execute ", "rode ", "rodar ", "open ");
+        for (String prefix : prefixes) {
+            if (normalized.startsWith(prefix)) {
+                int idx = original.toLowerCase(Locale.ROOT).indexOf(prefix);
+                if (idx < 0) idx = 0;
+                String target = original.substring(Math.min(original.length(), idx + prefix.length())).trim();
+                String nt = normalize(target);
+                if (startsAny(nt, "powershell", "cmd", "prompt de comando", "terminal", "regedit", "editor do registro")) return null;
+                return target.replaceAll("^[,.:; ]+|[,.:; ]+$", "");
+            }
+        }
+        return null;
+    }
+
+    private static CommandResult tryLaunchInstalledApp(String original) {
+        String target = extractAppLaunchTarget(original);
+        if (target == null || target.isBlank()) return new CommandResult(false, "");
+        String needle = normalize(target);
+        if (needle.length() > 80) return new CommandResult(false, "Nome de aplicativo muito longo.");
+        try {
+            List<Path> shortcuts = installedShortcuts();
+            Path best = null;
+            Path exact = null;
+            int bestScore = 0;
+            boolean ambiguous = false;
+            for (Path path : shortcuts) {
+                String filename = path.getFileName().toString().replaceFirst("(?i)\\.(lnk|appref-ms)$", "");
+                String name = normalize(filename);
+                int score = name.equals(needle) ? 100 : name.startsWith(needle) ? 70 : name.contains(needle) ? 40 : 0;
+                if (score > bestScore) {
+                    bestScore = score; best = path; exact = score == 100 ? path : null; ambiguous = false;
+                } else if (score > 0 && score == bestScore && best != null && !path.equals(best)) ambiguous = true;
+            }
+            if (best == null || bestScore < 40)
+                return new CommandResult(false, "Não encontrei um atalho para “" + target + "” no Menu Iniciar ou na área de trabalho.");
+            if (ambiguous && exact == null)
+                return new CommandResult(false, "Encontrei mais de um aplicativo parecido com “" + target + "”. Use o nome mais completo.");
+            Path selected = exact != null ? exact : best;
+            new ProcessBuilder("explorer.exe", selected.toString()).start();
+            return new CommandResult(true, "Abrindo " + selected.getFileName().toString().replaceFirst("(?i)\\.(lnk|appref-ms)$", "") + ".");
+        } catch (Exception ex) {
+            return new CommandResult(false, "Não consegui abrir o aplicativo “" + target + "”.");
+        }
+    }
+
+    private static List<Path> installedShortcuts() {
+        if (installedShortcutsLoaded) return installedShortcutsCache;
+        synchronized (NoarMordomo.class) {
+            if (installedShortcutsLoaded) return installedShortcutsCache;
+            List<Path> found = new ArrayList<>();
+            String appData = System.getenv("APPDATA");
+            String programData = System.getenv("ProgramData");
+            List<Path> roots = new ArrayList<>();
+            if (appData != null) roots.add(Path.of(appData, "Microsoft", "Windows", "Start Menu", "Programs"));
+            if (programData != null) roots.add(Path.of(programData, "Microsoft", "Windows", "Start Menu", "Programs"));
+            Path home = Path.of(System.getProperty("user.home"));
+            roots.add(home.resolve("Desktop"));
+            if (programData != null) roots.add(Path.of(programData, "Desktop"));
+            for (Path root : roots) {
+                if (!Files.isDirectory(root)) continue;
+                try (Stream<Path> stream = Files.walk(root, 6)) {
+                    stream.filter(Files::isRegularFile)
+                            .filter(p -> {
+                                String name = p.getFileName().toString().toLowerCase(Locale.ROOT);
+                                return name.endsWith(".lnk") || name.endsWith(".appref-ms");
+                            })
+                            .limit(5000).forEach(found::add);
+                } catch (IOException ignored) { }
+            }
+            installedShortcutsCache = List.copyOf(found);
+            installedShortcutsLoaded = true;
+            return installedShortcutsCache;
+        }
+    }
+
+    private static boolean startsWithWakeWord(String text) {
+        String normalized = normalize(text);
+        return normalized.equals("noar") || normalized.startsWith("noar ");
+    }
+
+    private static String removeWakeWord(String text) {
+        String normalized = normalize(text);
+        if (!normalized.equals("noar") && !normalized.startsWith("noar ")) return text.trim();
+        int index = text.toLowerCase(Locale.ROOT).indexOf("noar");
+        return index < 0 ? text.trim() : text.substring(index + 4).replaceFirst("^[,.:; ]+", "").trim();
+    }
+
+    private static void handleVoiceCommand(String recognized) {
+        String spoken = recognized == null ? "" : recognized.trim();
+        if (spoken.isBlank()) return;
+        addEvent("OUVI: " + spoken);
+        boolean addressed = startsWithWakeWord(spoken);
+        String command = removeWakeWord(spoken);
+        if (command.isBlank()) return;
+        Intent intent = classify(command);
+        CommandResult result;
+        if (intent == Intent.UNKNOWN) {
+            result = tryLaunchInstalledApp(command);
+            if (result.ok) {
+                addEvent("AÇÃO: " + result.message);
+                addEvent("FALAR: " + result.message);
+                return;
+            }
+            if (addressed) {
+                String answer = askLocalAI(command);
+                if (answer == null || answer.isBlank()) answer = "Estou escutando continuamente, mas ainda não encontrei um cérebro de IA local. Conecte o motor local Noar em 127.0.0.1:8080 ou 127.0.0.1:1234 para responder perguntas abertas.";
+                addEvent("NOAR: " + answer);
+                addEvent("FALAR: " + answer);
+            }
+            return;
+        }
+        result = execute(command);
+        if (result.ok) {
+            addEvent("AÇÃO: " + result.message);
+            addEvent("FALAR: " + (intent == Intent.STATUS ? "As informações do computador estão na tela." : result.message));
+        } else {
+            addEvent("BLOQUEADO/ERRO: " + result.message);
+            addEvent("FALAR: " + result.message);
+        }
+    }
+
+    private static String askLocalAI(String prompt) {
+        String configured = System.getenv("NOAR_AI_ENDPOINT");
+        List<String> endpoints = new ArrayList<>();
+        if (configured != null && !configured.isBlank()) endpoints.add(configured.trim());
+        endpoints.add("http://127.0.0.1:8080/v1/chat/completions");
+        endpoints.add("http://127.0.0.1:1234/v1/chat/completions");
+        HttpClient client = HttpClient.newBuilder().connectTimeout(Duration.ofMillis(700)).build();
+        String clipped = prompt.length() > 1800 ? prompt.substring(0, 1800) : prompt;
+        String payload = "{\"model\":\"local-model\",\"messages\":[{\"role\":\"system\",\"content\":\"Você é Noar, um assistente local em português do Brasil. Seja útil, direto e honesto. Não afirme ter executado ações que não executou. Para operações do computador, explique limites e peça confirmação antes de ações destrutivas.\"},{\"role\":\"user\",\"content\":\"" +
+                jsonEscape(clipped) + "\"}],\"temperature\":0.4,\"max_tokens\":220}";
+        for (String endpoint : endpoints) {
+            try {
+                URI uri = URI.create(endpoint);
+                if (!"127.0.0.1".equals(uri.getHost()) && !"localhost".equalsIgnoreCase(uri.getHost())) continue;
+                HttpRequest request = HttpRequest.newBuilder(uri).timeout(Duration.ofSeconds(18))
+                        .header("Content-Type", "application/json")
+                        .POST(HttpRequest.BodyPublishers.ofString(payload, StandardCharsets.UTF_8)).build();
+                HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+                if (response.statusCode() >= 200 && response.statusCode() < 300) {
+                    String answer = extractJsonString(response.body(), "content");
+                    if (answer != null && !answer.isBlank()) return answer.trim();
+                }
+            } catch (Exception ignored) { }
+        }
+        return null;
+    }
+
+    private static String extractJsonString(String json, String key) {
+        if (json == null) return null;
+        Pattern pattern = Pattern.compile("\"" + Pattern.quote(key) + "\"\\s*:\\s*\"((?:\\\\.|[^\"\\\\])*)\"");
+        Matcher matcher = pattern.matcher(json);
+        if (!matcher.find()) return null;
+        String raw = matcher.group(1);
+        StringBuilder out = new StringBuilder();
+        for (int i = 0; i < raw.length(); i++) {
+            char c = raw.charAt(i);
+            if (c == '\\' && i + 1 < raw.length()) {
+                char n = raw.charAt(++i);
+                switch (n) {
+                    case 'n' -> out.append('\n');
+                    case 'r' -> out.append('\r');
+                    case 't' -> out.append('\t');
+                    case 'b' -> out.append('\b');
+                    case 'f' -> out.append('\f');
+                    case '"' -> out.append('"');
+                    case '\\' -> out.append('\\');
+                    case '/' -> out.append('/');
+                    default -> out.append(n);
+                }
+            } else out.append(c);
+        }
+        return out.toString();
+    }
+
+    private static boolean isPackagedWindowsApp() {
+        String command = ProcessHandle.current().info().command().orElse("");
+        if (command.isBlank()) return false;
+        try { return Path.of(command).getFileName().toString().equalsIgnoreCase("NoarMordomo.exe"); }
+        catch (Exception ignored) { return false; }
+    }
+
+    private static Path startupShortcutPath() {
+        String appData = System.getenv("APPDATA");
+        if (appData == null || appData.isBlank()) return null;
+        return Path.of(appData, "Microsoft", "Windows", "Start Menu", "Programs", "Startup", "Noar Mordomo.lnk");
+    }
+
+    private static boolean isAutoStartEnabled() {
+        Path shortcut = startupShortcutPath();
+        return shortcut != null && Files.exists(shortcut);
+    }
+
+    private static boolean setAutoStart(boolean active) {
+        Path shortcut = startupShortcutPath();
+        if (shortcut == null) return false;
+        try {
+            if (!active) {
+                Files.deleteIfExists(shortcut);
+                return true;
+            }
+            String command = ProcessHandle.current().info().command().orElse("");
+            if (command.isBlank() || !Path.of(command).getFileName().toString().equalsIgnoreCase("NoarMordomo.exe")) return false;
+            Path exe = Path.of(command).toAbsolutePath().normalize();
+            Files.createDirectories(shortcut.getParent());
+            String ps = "$w=New-Object -ComObject WScript.Shell; $s=$w.CreateShortcut(" + psQuote(shortcut.toString()) +
+                    "); $s.TargetPath=" + psQuote(exe.toString()) + "; $s.WorkingDirectory=" + psQuote(exe.getParent().toString()) + "; $s.Save()";
+            String encoded = Base64.getEncoder().encodeToString(ps.getBytes(StandardCharsets.UTF_16LE));
+            Process proc = new ProcessBuilder("powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-EncodedCommand", encoded)
+                    .redirectErrorStream(true).redirectOutput(ProcessBuilder.Redirect.DISCARD).start();
+            if (!proc.waitFor(8, TimeUnit.SECONDS)) { proc.destroyForcibly(); return false; }
+            return proc.exitValue() == 0 && Files.exists(shortcut);
+        } catch (Exception ex) { return false; }
+    }
+
+    private static String psQuote(String input) { return "'" + input.replace("'", "''") + "'"; }
+
+    private static Path locateVoiceScript() {
+        String cp = System.getProperty("java.class.path", "");
+        for (String entry : cp.split(Pattern.quote(File.pathSeparator))) {
+            try {
+                Path p = Path.of(entry).toAbsolutePath().normalize();
+                Path dir = Files.isDirectory(p) ? p : p.getParent();
+                if (dir != null) {
+                    Path candidate = dir.resolve("NoarVoiceListener.ps1");
+                    if (Files.isRegularFile(candidate)) return candidate;
+                }
+            } catch (Exception ignored) { }
+        }
+        Path fallback = Path.of("NoarVoiceListener.ps1").toAbsolutePath().normalize();
+        return Files.isRegularFile(fallback) ? fallback : null;
+    }
+
+    private static void startVoiceListener() {
+        if (!System.getProperty("os.name", "").toLowerCase(Locale.ROOT).contains("windows")) {
+            voiceStatus = "Escuta contínua disponível somente no Windows.";
+            addEvent("SISTEMA: escuta por voz requer Windows.");
+            return;
+        }
+        Path script = locateVoiceScript();
+        if (script == null) {
+            voiceStatus = "Script de voz contínua não encontrado.";
+            addEvent("ERRO: faltou NoarVoiceListener.ps1 junto ao aplicativo.");
+            return;
+        }
+        try {
+            String local = System.getenv("LOCALAPPDATA");
+            Path log = local == null ? Path.of(System.getProperty("user.home"), "noar-voice.log") :
+                    Path.of(local, "NoarMordomo", "voice-listener.log");
+            Files.createDirectories(log.getParent());
+            voiceProcess = new ProcessBuilder("powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+                    "-WindowStyle", "Hidden", "-File", script.toString(), "-ApiRoot", "http://" + HOST + ":" + PORT + "/api")
+                    .redirectErrorStream(true).redirectOutput(log.toFile()).start();
+            voiceStatus = "Microfone iniciando; escuta contínua ativa.";
+            addEvent("SISTEMA: serviço de voz contínua iniciado. Log técnico em " + log);
+        } catch (Exception ex) {
+            voiceStatus = "Não consegui iniciar a escuta contínua do Windows.";
+            addEvent("ERRO: não foi possível iniciar o serviço de voz.");
+        }
+    }
+
+    private static void stopVoiceListener() {
+        Process current = voiceProcess;
+        if (current != null && current.isAlive()) current.destroyForcibly();
+    }
+
+    private static String eventsJson() {
+        StringBuilder out = new StringBuilder("{\"events\":[");
+        for (int i = 0; i < EVENTS.size(); i++) {
+            if (i > 0) out.append(',');
+            out.append('"').append(jsonEscape(EVENTS.get(i))).append('"');
+        }
+        return out.append("]}").toString();
+    }
+
+    private static void addEvent(String event) {
+        EVENTS.add(event);
+        while (EVENTS.size() > 40) EVENTS.remove(0);
+    }
+
+    private static boolean trustedOrigin(HttpExchange exchange) {
+        String origin = exchange.getRequestHeaders().getFirst("Origin");
+        return origin == null || origin.equals("http://" + HOST + ":" + PORT) || origin.equals("http://localhost:" + PORT);
+    }
+
+    private static String voiceControlJson() {
+        return "{\"ok\":true,\"active\":" + (LISTENING_ENABLED.get() && !SPEAKING.get()) +
+                ",\"listeningEnabled\":" + LISTENING_ENABLED.get() + ",\"speaking\":" + SPEAKING.get() +
+                ",\"voiceStatus\":\"" + jsonEscape(voiceStatus) + "\"}";
     }
 
     private static CommandResult launch(List<String> command, String successMessage) throws IOException {
@@ -321,7 +811,10 @@ fetch('/api/status').then(r=>r.json()).then(s=>{$('statusLine').textContent=s.pl
 
     private static String statusJson() {
         return "{\"ok\":true,\"platform\":\"" + jsonEscape(System.getProperty("os.name")) +
-                "\",\"message\":\"" + jsonEscape(statusText()) + "\"}";
+                "\",\"message\":\"" + jsonEscape(statusText()) +
+                "\",\"voiceStatus\":\"" + jsonEscape(voiceStatus) +
+                "\",\"listening\":" + (LISTENING_ENABLED.get() && !SPEAKING.get()) +
+                ",\"autostart\":" + isAutoStartEnabled() + "}";
     }
 
     private static String extractWebQuery(String original) {
@@ -416,7 +909,11 @@ fetch('/api/status').then(r=>r.json()).then(s=>{$('statusLine').textContent=s.pl
         check("reconhece pesquisa web", classify("pesquisar na internet notícias") == Intent.SEARCH_WEB, passed);
         check("reconhece criar pasta", classify("criar pasta Projetos") == Intent.CREATE_FOLDER, passed);
         check("não trata comando arbitrário como ação", classify("format C:") == Intent.UNKNOWN, passed);
-        System.out.println("Testes locais: " + passed[0] + "/10 aprovados.");
+        check("reconhece ditado universal", classify("digite olá mundo") == Intent.TYPE_TEXT, passed);
+        check("reconhece atalho de teclado", classify("pressione enter") == Intent.PRESS_KEY, passed);
+        check("extrai nome de aplicativo para abrir", "google chrome".equals(normalize(extractAppLaunchTarget("abra o Google Chrome"))), passed);
+        check("reconhece palavra de ativação", startsWithWakeWord("Noar, me explique isso"), passed);
+        System.out.println("Testes locais: " + passed[0] + "/14 aprovados.");
         if (passed[0] != 10) System.exit(1);
     }
 
