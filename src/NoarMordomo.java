@@ -913,7 +913,7 @@ setInterval(refreshStatus,1800); setInterval(refreshEvents,1100);
         check("extrai nome de aplicativo para abrir", "google chrome".equals(normalize(extractAppLaunchTarget("abra o Google Chrome"))), passed);
         check("reconhece palavra de ativação", startsWithWakeWord("Noar, me explique isso"), passed);
         System.out.println("Testes locais: " + passed[0] + "/14 aprovados.");
-        if (passed[0] != 10) System.exit(1);
+        if (passed[0] != 14) System.exit(1);
     }
 
     private static void check(String name, boolean condition, int[] passed) {
