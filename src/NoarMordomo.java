@@ -38,6 +38,12 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Stream;
+import javax.swing.*;
+import java.awt.Color;
+import java.awt.FlowLayout;
+import java.awt.BorderLayout;
+import java.awt.Font;
+import java.awt.Insets;
 
 public final class NoarMordomo {
     private static final int PORT = 8770;
@@ -52,105 +58,8 @@ public final class NoarMordomo {
     private static volatile Process voiceProcess;
     private static volatile List<Path> installedShortcutsCache = List.of();
     private static volatile boolean installedShortcutsLoaded = false;
-
-    private static final String PAGE = """
-<!doctype html>
-<html lang="pt-BR">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<meta name="color-scheme" content="dark">
-<title>Noar Mordomo</title>
-<style>
-:root{color-scheme:dark;--bg:#0b1020;--panel:#131b30;--line:#293754;--text:#eef4ff;--muted:#a9b7d0;--blue:#6aa6ff;--good:#65d6a2}
-*{box-sizing:border-box}body{margin:0;background:radial-gradient(ellipse at top,#182647 0,#0b1020 60%);font:16px/1.5 "Segoe UI",system-ui,sans-serif;color:var(--text);min-height:100vh;display:grid;place-items:center;padding:22px}
-main{width:min(800px,100%)}header{display:flex;align-items:center;gap:15px;margin-bottom:20px}.logo{width:62px;height:62px;border-radius:20px;background:linear-gradient(145deg,#4389f6,#243b75);display:grid;place-items:center;font-size:30px;box-shadow:0 12px 32px #0005}
-h1{font-size:clamp(25px,5vw,36px);margin:0;letter-spacing:.3px}header p{margin:4px 0 0;color:var(--muted)}
-.card{background:#131b30ee;border:1px solid var(--line);border-radius:22px;padding:22px;box-shadow:0 18px 60px #0004;margin-bottom:14px}
-.status{display:flex;align-items:center;gap:8px;color:var(--muted);font-size:14px}.dot{width:9px;height:9px;border-radius:50%;background:var(--good);box-shadow:0 0 12px #65d6a277}
-label{display:block;font-weight:600;margin-bottom:10px}textarea{width:100%;min-height:94px;resize:vertical;background:#0c1324;border:1px solid #354565;border-radius:13px;padding:14px;color:var(--text);font:inherit;outline:none}textarea:focus{border-color:var(--blue);box-shadow:0 0 0 3px #6aa6ff22}
-.buttons{display:flex;flex-wrap:wrap;gap:10px;margin-top:12px}button{border:1px solid #385174;border-radius:12px;background:#1c2a46;color:var(--text);font:600 14px/1.2 inherit;padding:12px 15px;cursor:pointer}button:hover{filter:brightness(1.17)}button.primary{background:linear-gradient(145deg,#3e83ed,#2d5fba);border-color:#6aa6ff}button:disabled{opacity:.5;cursor:wait}
-.answer{white-space:pre-wrap;overflow-wrap:anywhere;min-height:55px;border-radius:12px;background:#0b1222;padding:14px;margin-top:15px;color:#d8e5fc}.quick{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px}.quick button{background:#101a2e;font-weight:500;color:#c6d8f5}.foot{color:#8294b6;font-size:12px;text-align:center;padding:8px 10px}.warn{color:#ffd89a}
-</style>
-</head>
-<body><main>
-<header><div class="logo" aria-hidden="true">✦</div><div><h1>Noar Mordomo</h1><p>Seu assistente local para Windows</p></div></header>
-<section class="card">
-<div class="status"><span class="dot"></span><span id="statusLine">Conectado ao assistente local</span></div>
-<p>O microfone fica <b>escutando continuamente</b>, mesmo quando você está usando outros programas. Exemplo: “abrir Chrome”, “digite olá” ou “Noar, me explique isso”.</p>
-<label for="command">O que você quer que eu faça?</label>
-<textarea id="command" rows="3" placeholder="Digite aqui ou fale um comando a qualquer momento..."></textarea>
-<div class="buttons"><button class="primary" id="send">Executar comando digitado</button><button id="listenToggle">Pausar microfone</button><button id="autostartToggle">Início com Windows</button><button id="system">Informações do PC</button></div>
-<div class="quick">
-<button data-cmd="abrir calculadora">Calculadora</button><button data-cmd="abrir bloco de notas">Bloco de Notas</button><button data-cmd="abrir explorador de arquivos">Explorador</button><button data-cmd="abrir downloads">Downloads</button><button data-cmd="abrir documentos">Documentos</button>
-</div>
-<div class="answer" id="answer" role="status" aria-live="polite">Olá! Sou o Noar. Como posso ajudar?</div>
-</section>
-<section class="card">
-<b>Comandos disponíveis</b>
-<p>O Noar pode abrir aplicativos instalados que tenham atalhos no Menu Iniciar, ditar texto na janela ativa, pressionar atalhos de teclado e consultar o computador. Para perguntas abertas, pode usar um motor de IA local compatível rodando em <code>127.0.0.1:8080</code> ou <code>127.0.0.1:1234</code>.</p>
-<p class="warn">O microfone não grava arquivos de áudio: o reconhecimento é feito pelo mecanismo de voz do Windows e apenas o texto reconhecido é enviado ao Noar local. Você pode pausar a escuta. Comandos de terminal, exclusões e alterações do Registro continuam bloqueados.</p>
-</section>
-<div class="foot">Escuta contínua pelo Windows Speech. O reconhecimento exige o recurso de voz em português (Brasil) instalado no Windows. O serviço local não grava áudio.</div>
-</main>
-<script>
-const $=id=>document.getElementById(id);
-let lastSpokenEvent=''; let eventsInitialized=false;
-function speakText(text){
-  if(!text || !('speechSynthesis' in window)) return;
-  fetch('/api/speaking',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded;charset=UTF-8'},body:new URLSearchParams({active:'true'})}).catch(()=>{});
-  speechSynthesis.cancel();
-  const u=new SpeechSynthesisUtterance(text.slice(0,260)); u.lang='pt-BR';
-  const finish=()=>fetch('/api/speaking',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded;charset=UTF-8'},body:new URLSearchParams({active:'false'})}).catch(()=>{});
-  u.onend=finish; u.onerror=finish; speechSynthesis.speak(u);
-}
-async function execute(command){
-  if(!command.trim()){ $('answer').textContent='Digite um comando primeiro.'; return; }
-  $('send').disabled=true; $('answer').textContent='Processando...';
-  try{
-    const response=await fetch('/api/command',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded;charset=UTF-8'},body:new URLSearchParams({command})});
-    const data=await response.json(); $('answer').textContent=data.message||'Comando recebido.';
-    if(data.ok && data.speak!==false) speakText(data.message||'Pronto');
-  }catch(e){$('answer').textContent='Não consegui falar com o Noar. Feche e abra o programa novamente.';}
-  finally{$('send').disabled=false;}
-}
-async function refreshStatus(){
-  try{
-    const s=await (await fetch('/api/status')).json();
-    $('statusLine').textContent=s.voiceStatus+' · '+(s.listening?'microfone ligado':'microfone pausado');
-    $('listenToggle').dataset.active=String(s.listening);
-    $('listenToggle').textContent=s.listening?'Pausar microfone':'Retomar microfone';
-    $('autostartToggle').dataset.enabled=String(s.autostart);
-    $('autostartToggle').textContent=s.autostart?'Início com Windows: ligado':'Início com Windows: desligado';
-  }catch(e){$('statusLine').textContent='Conectando ao serviço local...';}
-}
-async function refreshEvents(){
-  try{
-    const d=await (await fetch('/api/events')).json(); const events=d.events||[];
-    if(events.length) $('answer').textContent=events.slice(-12).join('\n');
-    const speech=events.filter(x=>x.startsWith('FALAR: ')).at(-1);
-    if(!eventsInitialized){lastSpokenEvent=speech||'';eventsInitialized=true;}
-    else if(speech && speech!==lastSpokenEvent){lastSpokenEvent=speech;speakText(speech.slice(7));}
-  }catch(e){}
-}
-$('send').addEventListener('click',()=>execute($('command').value));
-$('command').addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();execute($('command').value);}});
-$('system').addEventListener('click',()=>execute('informações do sistema'));
-$('listenToggle').addEventListener('click',async()=>{
- const enabled=$('listenToggle').dataset.active!=='true';
- await fetch('/api/listening',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded;charset=UTF-8'},body:new URLSearchParams({active:String(enabled)})});
- refreshStatus();
-});
-$('autostartToggle').addEventListener('click',async()=>{
- const enabled=$('autostartToggle').dataset.enabled!=='true';
- const r=await fetch('/api/autostart',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded;charset=UTF-8'},body:new URLSearchParams({active:String(enabled)})});
- const d=await r.json(); $('answer').textContent=d.message; refreshStatus();
-});
-document.querySelectorAll('[data-cmd]').forEach(b=>b.addEventListener('click',()=>{ $('command').value=b.dataset.cmd; execute(b.dataset.cmd); }));
-refreshStatus(); refreshEvents();
-setInterval(refreshStatus,1800); setInterval(refreshEvents,1100);
-</script></body></html>
-""";
+    private static volatile double voiceConfidenceThreshold = 0.43;
+    private static volatile JTextArea nativeAnswerArea;
 
     private enum Intent {
         EMPTY, STATUS, CALCULATOR, NOTEPAD, EXPLORER, SETTINGS,
@@ -163,7 +72,7 @@ setInterval(refreshStatus,1800); setInterval(refreshEvents,1100);
             runSelfTests();
             return;
         }
-        boolean noBrowser = List.of(args).contains("--no-browser");
+        boolean noUi = List.of(args).contains("--no-ui");
         boolean noVoice = List.of(args).contains("--no-voice");
         HttpServer server = HttpServer.create(new InetSocketAddress(InetAddress.getByName(HOST), PORT), 0);
         server.setExecutor(Executors.newFixedThreadPool(8));
@@ -175,28 +84,249 @@ setInterval(refreshStatus,1800); setInterval(refreshEvents,1100);
             boolean enabled = setAutoStart(true);
             if (enabled) addEvent("SISTEMA: Noar configurado para iniciar com o Windows e escutar continuamente.");
         }
-        URI uri = URI.create("http://" + HOST + ":" + PORT + "/");
-        System.out.println(APP_NAME + " ativo em " + uri);
-        if (!noBrowser) {
-            try {
-                if (Desktop.isDesktopSupported() && Desktop.getDesktop().isSupported(Desktop.Action.BROWSE)) {
-                    Desktop.getDesktop().browse(uri);
-                } else {
-                    System.out.println("Abra manualmente: " + uri);
+        System.out.println(APP_NAME + " ativo como aplicativo nativo do Windows.");
+        if (!noUi && !GraphicsEnvironment.isHeadless()) launchNativePanel();
+    }
+
+    private static void launchNativePanel() {
+        SwingUtilities.invokeLater(() -> {
+            try { UIManager.setLookAndFeel(UIManager.getSystemLookAndFeelClassName()); } catch (Exception ignored) { }
+            Color bg = new Color(12, 17, 31);
+            Color card = new Color(20, 29, 49);
+            Color line = new Color(49, 66, 94);
+            Color fg = new Color(235, 242, 255);
+            Color muted = new Color(164, 181, 209);
+            Color blue = new Color(55, 112, 214);
+
+            JFrame frame = new JFrame("Noar Mordomo");
+            frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+            frame.setMinimumSize(new java.awt.Dimension(740, 640));
+            frame.setSize(900, 740);
+            frame.setLocationRelativeTo(null);
+
+            JPanel root = new JPanel(new BorderLayout(12, 12));
+            root.setBackground(bg);
+            root.setBorder(BorderFactory.createEmptyBorder(18, 18, 18, 18));
+
+            JPanel heading = new JPanel();
+            heading.setOpaque(false);
+            heading.setLayout(new BoxLayout(heading, BoxLayout.Y_AXIS));
+            JLabel title = new JLabel("✦  Noar Mordomo");
+            title.setFont(new Font("Segoe UI", Font.BOLD, 27));
+            title.setForeground(fg);
+            JLabel subtitle = new JLabel("Assistente do Windows • painel próprio, sem navegador");
+            subtitle.setFont(new Font("Segoe UI", Font.PLAIN, 13));
+            subtitle.setForeground(muted);
+            heading.add(title);
+            heading.add(Box.createVerticalStrut(4));
+            heading.add(subtitle);
+            root.add(heading, BorderLayout.NORTH);
+
+            JPanel center = new JPanel(new BorderLayout(10, 10));
+            center.setOpaque(false);
+            JPanel commandCard = new JPanel(new BorderLayout(8, 8));
+            commandCard.setBackground(card);
+            commandCard.setBorder(BorderFactory.createCompoundBorder(
+                    BorderFactory.createLineBorder(line, 1, true),
+                    BorderFactory.createEmptyBorder(13, 13, 13, 13)));
+            JLabel commandLabel = new JLabel("Fale com o Noar ou digite um comando");
+            commandLabel.setFont(new Font("Segoe UI", Font.BOLD, 15));
+            commandLabel.setForeground(fg);
+            JTextArea input = new JTextArea(3, 50);
+            input.setFont(new Font("Segoe UI", Font.PLAIN, 14));
+            input.setLineWrap(true);
+            input.setWrapStyleWord(true);
+            input.setBackground(new Color(9, 14, 26));
+            input.setForeground(fg);
+            input.setCaretColor(fg);
+            input.setBorder(BorderFactory.createEmptyBorder(8, 8, 8, 8));
+            JScrollPane inputScroll = new JScrollPane(input);
+            inputScroll.setBorder(BorderFactory.createLineBorder(line, 1, true));
+
+            JTextArea answer = new JTextArea("Olá! Sou o Noar. O microfone pode ficar ligado enquanto você usa outros programas.");
+            answer.setEditable(false);
+            answer.setLineWrap(true);
+            answer.setWrapStyleWord(true);
+            answer.setFont(new Font("Segoe UI", Font.PLAIN, 14));
+            answer.setBackground(new Color(9, 14, 26));
+            answer.setForeground(fg);
+            answer.setBorder(BorderFactory.createEmptyBorder(10, 10, 10, 10));
+            nativeAnswerArea = answer;
+            JTextArea activity = new JTextArea("O que o microfone reconhecer aparecerá nesta área.");
+            activity.setEditable(false);
+            activity.setLineWrap(true);
+            activity.setWrapStyleWord(true);
+            activity.setFont(new Font("Consolas", Font.PLAIN, 12));
+            activity.setBackground(new Color(9, 14, 26));
+            activity.setForeground(muted);
+            activity.setBorder(BorderFactory.createEmptyBorder(8, 8, 8, 8));
+            JTabbedPane tabs = new JTabbedPane();
+            tabs.addTab("Resposta", new JScrollPane(answer));
+            tabs.addTab("Voz reconhecida e atividade", new JScrollPane(activity));
+
+            JPanel buttons = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 0));
+            buttons.setOpaque(false);
+            JButton send = nativeButton("Enviar comando", blue, fg);
+            JButton listen = nativeButton("Pausar microfone", new Color(38, 51, 76), fg);
+            JButton start = nativeButton("Início com Windows", new Color(38, 51, 76), fg);
+            JButton pc = nativeButton("Informações do PC", new Color(38, 51, 76), fg);
+            JButton calc = nativeButton("Calculadora", new Color(38, 51, 76), fg);
+            JButton notes = nativeButton("Bloco de Notas", new Color(38, 51, 76), fg);
+            JButton explorer = nativeButton("Explorador", new Color(38, 51, 76), fg);
+            buttons.add(send); buttons.add(listen); buttons.add(start); buttons.add(pc);
+            buttons.add(calc); buttons.add(notes); buttons.add(explorer);
+
+            JPanel sensitivity = new JPanel(new BorderLayout(6, 3));
+            sensitivity.setOpaque(false);
+            JLabel sensitivityText = new JLabel();
+            sensitivityText.setForeground(muted);
+            sensitivityText.setFont(new Font("Segoe UI", Font.PLAIN, 12));
+            JSlider slider = new JSlider(30, 80, (int)Math.round(voiceConfidenceThreshold * 100));
+            slider.setOpaque(false);
+            slider.setMajorTickSpacing(10);
+            slider.setMinorTickSpacing(5);
+            slider.setPaintTicks(true);
+            slider.setPaintLabels(true);
+            slider.addChangeListener(e -> {
+                voiceConfidenceThreshold = slider.getValue() / 100.0;
+                sensitivityText.setText("Sensibilidade: " + slider.getValue() + "% — menor = escuta falas mais baixas; maior = filtra mais ruído.");
+            });
+            sensitivityText.setText("Sensibilidade: " + slider.getValue() + "% — menor = escuta falas mais baixas; maior = filtra mais ruído.");
+            sensitivity.add(sensitivityText, BorderLayout.NORTH);
+            sensitivity.add(slider, BorderLayout.CENTER);
+            JLabel privacy = new JLabel("O áudio não é gravado. Pause o microfone quando quiser privacidade.");
+            privacy.setForeground(muted);
+            privacy.setFont(new Font("Segoe UI", Font.PLAIN, 11));
+
+            JPanel commandBottom = new JPanel();
+            commandBottom.setOpaque(false);
+            commandBottom.setLayout(new BoxLayout(commandBottom, BoxLayout.Y_AXIS));
+            commandBottom.add(buttons);
+            commandBottom.add(Box.createVerticalStrut(7));
+            commandBottom.add(sensitivity);
+            commandBottom.add(Box.createVerticalStrut(5));
+            commandBottom.add(privacy);
+            commandCard.add(commandLabel, BorderLayout.NORTH);
+            commandCard.add(inputScroll, BorderLayout.CENTER);
+            commandCard.add(commandBottom, BorderLayout.SOUTH);
+
+            JLabel status = new JLabel("Iniciando reconhecimento de voz...");
+            status.setFont(new Font("Segoe UI", Font.BOLD, 12));
+            status.setForeground(new Color(143, 225, 185));
+            status.setBorder(BorderFactory.createCompoundBorder(
+                    BorderFactory.createLineBorder(line, 1, true),
+                    BorderFactory.createEmptyBorder(9, 10, 9, 10)));
+            JPanel lower = new JPanel(new BorderLayout(7, 7));
+            lower.setOpaque(false);
+            lower.add(status, BorderLayout.NORTH);
+            lower.add(tabs, BorderLayout.CENTER);
+            center.add(commandCard, BorderLayout.NORTH);
+            center.add(lower, BorderLayout.CENTER);
+            root.add(center, BorderLayout.CENTER);
+
+            send.addActionListener(e -> runNativeCommand(input.getText(), answer));
+            input.addKeyListener(new java.awt.event.KeyAdapter() {
+                @Override public void keyPressed(java.awt.event.KeyEvent e) {
+                    if (e.getKeyCode() == java.awt.event.KeyEvent.VK_ENTER && !e.isShiftDown()) {
+                        e.consume();
+                        runNativeCommand(input.getText(), answer);
+                    }
                 }
-            } catch (Exception ex) {
-                System.out.println("Abra manualmente: " + uri);
-            }
+            });
+            pc.addActionListener(e -> runNativeCommand("informações do PC", answer));
+            calc.addActionListener(e -> runNativeCommand("abrir calculadora", answer));
+            notes.addActionListener(e -> runNativeCommand("abrir bloco de notas", answer));
+            explorer.addActionListener(e -> runNativeCommand("abrir explorador de arquivos", answer));
+            listen.addActionListener(e -> {
+                boolean enabled = !LISTENING_ENABLED.get();
+                LISTENING_ENABLED.set(enabled);
+                voiceStatus = enabled ? "Solicitando escuta contínua..." : "Microfone pausado pelo usuário.";
+                addEvent(enabled ? "SISTEMA: escuta ativada pelo painel." : "SISTEMA: escuta pausada pelo painel.");
+            });
+            start.addActionListener(e -> {
+                boolean enabled = !isAutoStartEnabled();
+                boolean success = setAutoStart(enabled);
+                answer.setText(success
+                        ? (enabled ? "O Noar será iniciado junto com o Windows." : "A inicialização automática foi desativada.")
+                        : "Não consegui alterar o início automático nesta instalação.");
+            });
+            javax.swing.Timer refresh = new javax.swing.Timer(800, e -> {
+                boolean active = LISTENING_ENABLED.get() && !SPEAKING.get();
+                String mode = active ? "MICROFONE LIGADO" : (SPEAKING.get() ? "NOAR FALANDO" : "MICROFONE PAUSADO");
+                status.setText(mode + "   •   " + voiceStatus);
+                status.setForeground(active ? new Color(143, 225, 185) : new Color(255, 208, 132));
+                String log = String.join("\n", EVENTS);
+                if (!log.isBlank() && !log.equals(activity.getText())) {
+                    activity.setText(log);
+                    activity.setCaretPosition(activity.getDocument().getLength());
+                }
+                listen.setText(LISTENING_ENABLED.get() ? "Pausar microfone" : "Retomar microfone");
+                start.setText(isAutoStartEnabled() ? "Início com Windows: ligado" : "Início com Windows: desligado");
+            });
+            refresh.start();
+            frame.setContentPane(root);
+            frame.setVisible(true);
+        });
+    }
+
+    private static JButton nativeButton(String label, Color background, Color foreground) {
+        JButton b = new JButton(label);
+        b.setFocusPainted(false);
+        b.setFont(new Font("Segoe UI", Font.BOLD, 12));
+        b.setBackground(background);
+        b.setForeground(foreground);
+        b.setMargin(new Insets(8, 10, 8, 10));
+        return b;
+    }
+
+    private static void runNativeCommand(String command, JTextArea answer) {
+        if (command == null || command.isBlank()) {
+            answer.setText("Digite um comando primeiro.");
+            return;
         }
+        answer.setText("Processando comando...");
+        Thread worker = new Thread(() -> {
+            CommandResult result = execute(command.trim());
+            if (result.ok) addEvent("AÇÃO: " + result.message);
+            else addEvent("AVISO: " + result.message);
+            SwingUtilities.invokeLater(() -> answer.setText(result.message));
+            if (result.ok) speakResponse(result.message);
+        }, "Noar-Comando");
+        worker.setDaemon(true);
+        worker.start();
+    }
+
+    private static void speakResponse(String rawText) {
+        if (rawText == null || rawText.isBlank()
+                || !System.getProperty("os.name", "").toLowerCase(Locale.ROOT).contains("windows")) return;
+        String text = rawText.length() > 500 ? rawText.substring(0, 500) : rawText;
+        Thread worker = new Thread(() -> {
+            SPEAKING.set(true);
+            try {
+                String text64 = Base64.getEncoder().encodeToString(text.getBytes(StandardCharsets.UTF_8));
+                String script = "$ErrorActionPreference='Stop'; Add-Type -AssemblyName System.Speech; " +
+                        "$s=New-Object System.Speech.Synthesis.SpeechSynthesizer; " +
+                        "$t=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('" + text64 + "')); " +
+                        "$v=$s.GetInstalledVoices() | Where-Object { $_.VoiceInfo.Culture.Name -eq 'pt-BR' } | Select-Object -First 1; " +
+                        "if($v){$s.SelectVoice($v.VoiceInfo.Name)}; $s.Rate=0; $s.Volume=100; $s.Speak($t); $s.Dispose();";
+                String encoded = Base64.getEncoder().encodeToString(script.getBytes(StandardCharsets.UTF_16LE));
+                Process p = new ProcessBuilder("powershell.exe", "-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden",
+                        "-ExecutionPolicy", "Bypass", "-EncodedCommand", encoded)
+                        .redirectErrorStream(true).redirectOutput(ProcessBuilder.Redirect.DISCARD).start();
+                if (!p.waitFor(30, TimeUnit.SECONDS)) p.destroyForcibly();
+            } catch (Exception ignored) {
+                // The text answer stays available even if Windows speech output is unavailable.
+            } finally {
+                SPEAKING.set(false);
+            }
+        }, "Noar-Voz");
+        worker.setDaemon(true);
+        worker.start();
     }
 
     private static void handle(HttpExchange exchange) throws IOException {
         try (exchange) {
             String path = exchange.getRequestURI().getPath();
-            if ("/".equals(path) && "GET".equalsIgnoreCase(exchange.getRequestMethod())) {
-                send(exchange, 200, "text/html; charset=utf-8", PAGE);
-                return;
-            }
             if ("/api/status".equals(path) && "GET".equalsIgnoreCase(exchange.getRequestMethod())) {
                 sendJson(exchange, 200, statusJson());
                 return;
@@ -534,6 +664,7 @@ setInterval(refreshStatus,1800); setInterval(refreshEvents,1100);
             if (result.ok) {
                 addEvent("AÇÃO: " + result.message);
                 addEvent("FALAR: " + result.message);
+                speakResponse(result.message);
                 return;
             }
             if (addressed) {
@@ -541,16 +672,20 @@ setInterval(refreshStatus,1800); setInterval(refreshEvents,1100);
                 if (answer == null || answer.isBlank()) answer = "Estou escutando continuamente, mas ainda não encontrei um cérebro de IA local. Conecte o motor local Noar em 127.0.0.1:8080 ou 127.0.0.1:1234 para responder perguntas abertas.";
                 addEvent("NOAR: " + answer);
                 addEvent("FALAR: " + answer);
+                speakResponse(answer);
             }
             return;
         }
         result = execute(command);
         if (result.ok) {
             addEvent("AÇÃO: " + result.message);
-            addEvent("FALAR: " + (intent == Intent.STATUS ? "As informações do computador estão na tela." : result.message));
+            String voiceReply = intent == Intent.STATUS ? "As informações do computador estão na tela." : result.message;
+            addEvent("FALAR: " + voiceReply);
+            speakResponse(voiceReply);
         } else {
             addEvent("BLOQUEADO/ERRO: " + result.message);
             addEvent("FALAR: " + result.message);
+            speakResponse(result.message);
         }
     }
 
@@ -711,6 +846,10 @@ setInterval(refreshStatus,1800); setInterval(refreshEvents,1100);
     private static void addEvent(String event) {
         EVENTS.add(event);
         while (EVENTS.size() > 40) EVENTS.remove(0);
+        if (event != null && event.startsWith("FALAR: ") && nativeAnswerArea != null) {
+            JTextArea target = nativeAnswerArea;
+            SwingUtilities.invokeLater(() -> target.setText(event.substring(7)));
+        }
     }
 
     private static boolean trustedOrigin(HttpExchange exchange) {
@@ -721,6 +860,7 @@ setInterval(refreshStatus,1800); setInterval(refreshEvents,1100);
     private static String voiceControlJson() {
         return "{\"ok\":true,\"active\":" + (LISTENING_ENABLED.get() && !SPEAKING.get()) +
                 ",\"listeningEnabled\":" + LISTENING_ENABLED.get() + ",\"speaking\":" + SPEAKING.get() +
+                ",\"confidenceThreshold\":" + String.format(Locale.ROOT, "%.2f", voiceConfidenceThreshold) +
                 ",\"voiceStatus\":\"" + jsonEscape(voiceStatus) + "\"}";
     }
 
