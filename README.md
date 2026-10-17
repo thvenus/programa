@@ -2,6 +2,8 @@
 
 Esta versão melhora o painel nativo e adiciona busca, seleção e teste de microfone.
 
+Compilação do instalador EXE: automática pelo GitHub Actions ao publicar alterações na branch principal.
+
 ## Melhorias
 - Cores consistentes de alto contraste em campos de texto, abas e caixas roláveis.
 - Busca de dispositivos de entrada ativos por meio do Windows Core Audio, mostrando o nome amigável do dispositivo e qual está marcado como padrão.
